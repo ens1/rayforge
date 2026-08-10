@@ -786,6 +786,44 @@ def test_process_contract_survives_to_machine_space_ops(
     )
 
 
+def test_laser_tab_metadata_declares_effective_dynamic_bounds(
+    contour_step_class,
+    test_machine_and_config,
+):
+    machine, context = test_machine_and_config
+    step = contour_step_class.create(context, name="tabbed cut")
+    step.set_power(0.8)
+    step.set_tab_power(0.25)
+
+    metadata = step.get_process_metadata(machine)
+
+    assert metadata["power"] == {
+        "mode": "dynamic",
+        "value": 0.8,
+        "min": pytest.approx(0.2),
+        "max": 0.8,
+    }
+
+
+def test_zero_power_tabs_remain_static_metadata(
+    contour_step_class,
+    test_machine_and_config,
+):
+    machine, context = test_machine_and_config
+    step = contour_step_class.create(context, name="gap tabs")
+    step.set_power(0.8)
+    step.set_tab_power(0)
+
+    metadata = step.get_process_metadata(machine)
+
+    assert metadata["power"] == {
+        "mode": "static",
+        "value": 0.8,
+        "min": 0.8,
+        "max": 0.8,
+    }
+
+
 def test_job_encode_node_emits_encode_spec(
     contour_step_class, test_machine_and_config
 ):

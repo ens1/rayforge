@@ -43,9 +43,9 @@ class LaserHead(Head):
         self.laser_type: LaserType = LaserType.DIODE
         self.pwm_frequency: int = 500
         self.max_pwm_frequency: int = 5000
-        self.pulse_width: int = 50
-        self.min_pulse_width: int = 5
-        self.max_pulse_width: int = 500
+        self.pulse_width: float = 50.0
+        self.min_pulse_width: float = 5.0
+        self.max_pulse_width: float = 500.0
 
     @property
     def machine_capability(self) -> MachineCapability:
@@ -154,15 +154,16 @@ class LaserHead(Head):
         self.pwm_frequency = min(self.pwm_frequency, max_frequency)
         self.changed.send(self)
 
-    def set_pulse_width(self, width: int):
+    def set_pulse_width(self, width: float):
+        width = float(width)
         width = max(self.min_pulse_width, min(width, self.max_pulse_width))
         if self.pulse_width == width:
             return
         self.pulse_width = width
         self.changed.send(self)
 
-    def set_min_pulse_width(self, min_width: int):
-        min_width = max(1, min_width)
+    def set_min_pulse_width(self, min_width: float):
+        min_width = max(0.0, float(min_width))
         if self.min_pulse_width == min_width:
             return
         self.min_pulse_width = min_width
@@ -170,8 +171,8 @@ class LaserHead(Head):
         self.pulse_width = max(self.pulse_width, min_width)
         self.changed.send(self)
 
-    def set_max_pulse_width(self, max_width: int):
-        max_width = max(1, max_width)
+    def set_max_pulse_width(self, max_width: float):
+        max_width = max(0.0, float(max_width))
         if self.max_pulse_width == max_width:
             return
         self.max_pulse_width = max_width

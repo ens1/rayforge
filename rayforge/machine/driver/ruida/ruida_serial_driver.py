@@ -8,6 +8,7 @@ from typing import Any
 from ....core.varset import BaudrateVar, SerialPortVar, VarSet
 from ..driver import DriverSetupError
 from .program_driver import RuidaProgramDriver
+from .ruida_encoder import ruida_job_profile_vars
 
 
 class RuidaSerialDriver(RuidaProgramDriver):
@@ -31,6 +32,7 @@ class RuidaSerialDriver(RuidaProgramDriver):
                     description=_("USB serial port for the controller"),
                 ),
                 BaudrateVar(key="baudrate", default=115200),
+                *ruida_job_profile_vars(),
             ]
         )
 

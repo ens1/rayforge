@@ -7,6 +7,11 @@ from raygeo.ops.state import CoolantMode
 
 from ...context import get_context
 from ...core.model import Model
+from ...machine.driver import (
+    RuidaSerialDriver,
+    RuidaUdpProgramDriver,
+    get_driver_cls,
+)
 from ...machine.models.head import Head
 from ...machine.models.laser import LaserHead, LaserType
 from ...machine.models.machine import Machine
@@ -21,6 +26,14 @@ from ..shared.pref_rows.speed_spin_row import SpeedSpinRow
 from ..shared.preferences_group import PreferencesGroupWithButton
 from ..shared.preferences_page import TrackedPreferencesPage
 from ..sim3d.renderer.model_renderer import get_model_extent
+
+
+def _is_ruida_machine(machine: Machine) -> bool:
+    driver_cls = get_driver_cls(machine.driver_name or "")
+    return issubclass(
+        driver_cls,
+        (RuidaSerialDriver, RuidaUdpProgramDriver),
+    )
 
 
 class HeadRow(Gtk.Box):
@@ -247,6 +260,17 @@ class HeadListEditor(PreferencesGroupWithButton):
         if popover:
             popover.popdown()
         head.name = default_name
+        if isinstance(head, LaserHead) and _is_ruida_machine(self.machine):
+            used = {
+                existing.tool_number
+                for existing in self.machine.heads
+                if isinstance(existing, LaserHead)
+            }
+            free = next(
+                (number for number in (0, 1) if number not in used), None
+            )
+            if free is not None:
+                head.tool_number = free
         self.machine.add_head(head)
 
         # The machine.changed signal has already run and updated the UI.
@@ -384,8 +408,9 @@ class HeadModelGroup(Adw.PreferencesGroup):
 class LaserHeadDetailWidget(DebounceMixin):
     """Owns the PreferencesGroups for editing a LaserHead."""
 
-    def __init__(self):
+    def __init__(self, machine: Machine):
         super().__init__()
+        self.machine = machine
         self._head: LaserHead | None = None
         self._handler_ids = {}
         self._laser_type_values = [
@@ -441,6 +466,7 @@ class LaserHeadDetailWidget(DebounceMixin):
             self._on_tool_number_changed
         )
         self.properties_group.add(self.tool_number_row)
+        self.sync_machine()
 
         laser_type_store = Gtk.StringList()
         laser_type_store.append(_("Diode"))
@@ -566,8 +592,10 @@ class LaserHeadDetailWidget(DebounceMixin):
         self.pulse_width_row = SpinRow(
             _("Pulse Width"),
             _("Default pulse width in µs"),
-            lower=1,
+            lower=0,
             upper=100000,
+            step_increment=0.001,
+            digits=3,
         )
         self.pulse_width_row.value_changed.connect(
             self._on_pulse_width_changed
@@ -577,8 +605,10 @@ class LaserHeadDetailWidget(DebounceMixin):
         self.min_pulse_width_row = SpinRow(
             _("Min Pulse Width"),
             _("Minimum pulse width in µs"),
-            lower=1,
+            lower=0,
             upper=100000,
+            step_increment=0.001,
+            digits=3,
         )
         self.min_pulse_width_row.value_changed.connect(
             self._on_min_pulse_width_changed
@@ -588,8 +618,10 @@ class LaserHeadDetailWidget(DebounceMixin):
         self.max_pulse_width_row = SpinRow(
             _("Max Pulse Width"),
             _("Maximum pulse width in µs"),
-            lower=1,
+            lower=0,
             upper=100000,
+            step_increment=0.001,
+            digits=3,
         )
         self.max_pulse_width_row.value_changed.connect(
             self._on_max_pulse_width_changed
@@ -717,6 +749,16 @@ class LaserHeadDetailWidget(DebounceMixin):
         if self._head:
             self._head.set_tool_number(spinrow.get_int_value())
 
+    def sync_machine(self):
+        if _is_ruida_machine(self.machine):
+            subtitle = _(
+                "Ruida mapping: tool 0 is laser channel 1; "
+                "tool 1 is laser channel 2"
+            )
+        else:
+            subtitle = _("G-code tool number (e.g., T0, T1)")
+        self.tool_number_row.set_subtitle(subtitle)
+
     def _on_max_power_changed(self, spinrow):
         """Update the max power of the selected laser."""
         if self._head:
@@ -806,9 +848,9 @@ class LaserHeadDetailWidget(DebounceMixin):
     def _apply_pwm_fields(self, laser):
         laser.set_max_pwm_frequency(self.max_pwm_frequency_row.get_int_value())
         laser.set_pwm_frequency(self.pwm_frequency_row.get_int_value())
-        laser.set_max_pulse_width(self.max_pulse_width_row.get_int_value())
-        laser.set_min_pulse_width(self.min_pulse_width_row.get_int_value())
-        laser.set_pulse_width(self.pulse_width_row.get_int_value())
+        laser.set_max_pulse_width(self.max_pulse_width_row.get_value())
+        laser.set_min_pulse_width(self.min_pulse_width_row.get_value())
+        laser.set_pulse_width(self.pulse_width_row.get_value())
 
     def _on_pwm_frequency_changed(self, spinrow):
         if not self._head:
@@ -831,9 +873,9 @@ class LaserHeadDetailWidget(DebounceMixin):
     def _on_pulse_width_changed(self, spinrow):
         if not self._head:
             return
-        value = spinrow.get_int_value()
-        min_val = self.min_pulse_width_row.get_int_value()
-        max_val = self.max_pulse_width_row.get_int_value()
+        value = spinrow.get_value()
+        min_val = self.min_pulse_width_row.get_value()
+        max_val = self.max_pulse_width_row.get_value()
         if value < min_val:
             self.min_pulse_width_row.set_value(value)
         if value > max_val:
@@ -843,11 +885,11 @@ class LaserHeadDetailWidget(DebounceMixin):
     def _on_min_pulse_width_changed(self, spinrow):
         if not self._head:
             return
-        min_val = spinrow.get_int_value()
-        max_val = self.max_pulse_width_row.get_int_value()
+        min_val = spinrow.get_value()
+        max_val = self.max_pulse_width_row.get_value()
         if min_val > max_val:
             self.max_pulse_width_row.set_value(min_val)
-        pw_val = self.pulse_width_row.get_int_value()
+        pw_val = self.pulse_width_row.get_value()
         if pw_val < min_val:
             self.pulse_width_row.set_value(min_val)
         self._debounce(self._apply_pwm_fields, self._head)
@@ -855,11 +897,11 @@ class LaserHeadDetailWidget(DebounceMixin):
     def _on_max_pulse_width_changed(self, spinrow):
         if not self._head:
             return
-        max_val = spinrow.get_int_value()
-        min_val = self.min_pulse_width_row.get_int_value()
+        max_val = spinrow.get_value()
+        min_val = self.min_pulse_width_row.get_value()
         if max_val < min_val:
             self.min_pulse_width_row.set_value(max_val)
-        pw_val = self.pulse_width_row.get_int_value()
+        pw_val = self.pulse_width_row.get_value()
         if pw_val > max_val:
             self.pulse_width_row.set_value(max_val)
         self._debounce(self._apply_pwm_fields, self._head)
@@ -1039,7 +1081,7 @@ class HeadPreferencesPage(TrackedPreferencesPage):
         )
         self.add(self.head_list_editor)
 
-        self.laser_widget = LaserHeadDetailWidget()
+        self.laser_widget = LaserHeadDetailWidget(self.machine)
         for group in self.laser_widget.groups:
             self.add(group)
 
@@ -1051,6 +1093,7 @@ class HeadPreferencesPage(TrackedPreferencesPage):
         self.head_list_editor.list_box.connect(
             "row-selected", self._on_head_selected
         )
+        self.machine.changed.connect(self._on_machine_changed)
 
         # The initial selection is set inside the HeadListEditor's
         # constructor, which runs before this signal handler is connected.
@@ -1082,8 +1125,12 @@ class HeadPreferencesPage(TrackedPreferencesPage):
             self.laser_widget.set_head(None)
             self.spindle_widget.set_head(None)
 
+    def _on_machine_changed(self, sender, **kwargs):
+        self.laser_widget.sync_machine()
+
     def _on_destroy(self, *args):
         """Disconnects signals to prevent memory leaks."""
+        self.machine.changed.disconnect(self._on_machine_changed)
         self.machine.changed.disconnect(
             self.head_list_editor._on_machine_changed
         )

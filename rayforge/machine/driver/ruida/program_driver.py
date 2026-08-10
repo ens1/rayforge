@@ -25,13 +25,19 @@ from ..driver import (
     DriverMaturity,
     DriverSetupError,
     Pos,
+    PWMParams,
 )
-from .ruida_encoder import RuidaEncoder
+from .ruida_encoder import (
+    RuidaEncoder,
+    RuidaEncodingError,
+    ruida_pwm_params,
+)
 
 if TYPE_CHECKING:
     from raygeo.ops import Ops
 
     from ....core.doc import Doc
+    from ...models.head import Head
     from ...models.laser import Laser
     from ...models.machine import Machine
 
@@ -86,6 +92,19 @@ class RuidaProgramDriver(Driver):
         self._program_active = False
         self._execution_unconfirmed = False
 
+    def supports_pwm(self, head: Head) -> bool:
+        return self.get_pwm_params(head) is not None
+
+    def get_pwm_params(self, head: Head) -> PWMParams | None:
+        return ruida_pwm_params(self._machine, head)
+
+    @classmethod
+    def create_encoder_context(
+        cls,
+        machine: Machine,
+    ) -> tuple[OpsEncoder, Any]:
+        return RuidaEncoder.context_from_machine(machine)
+
     @property
     def machine_space_wcs(self) -> str:
         return "MACHINE"
@@ -104,13 +123,21 @@ class RuidaProgramDriver(Driver):
 
     @classmethod
     def create_encoder(cls, machine: Machine) -> OpsEncoder:
-        return RuidaEncoder()
+        return RuidaEncoder.from_machine(machine)
+
+    @classmethod
+    def encoder_token_payload(cls, machine: Machine) -> Any:
+        return RuidaEncoder.token_payload(machine)
 
     @abstractmethod
     def _create_transport(self, module: Any, **kwargs: Any) -> tuple[Any, str]:
         """Construct one ruida-re transport and its resource URI."""
 
     def _setup_implementation(self, **kwargs: Any) -> None:
+        try:
+            RuidaEncoder.token_payload(self._machine)
+        except RuidaEncodingError as error:
+            raise DriverSetupError(str(error)) from error
         module = _load_ruida_re()
         try:
             transport, resource = self._create_transport(module, **kwargs)

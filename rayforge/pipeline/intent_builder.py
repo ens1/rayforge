@@ -99,6 +99,7 @@ STEP_KEY_FMT = "step:{step_uid}"
 JOB_KEY = "job"
 JOB_ENCODE_KEY = "job:encode"
 JOB_MACHINEXFORM_KEY = "job:machinexform"
+_ENCODER_CONFIG_UNSET = object()
 
 
 def workpiece_key(wp_uid: str, step_uid: str) -> str:
@@ -333,13 +334,28 @@ class IntentBuilder:
         """
         if self._machine is None:
             return
+        driver_encoder = None
+        driver_encoder_config: Any = _ENCODER_CONFIG_UNSET
+        dialect = self._machine.dialect
+        if dialect is None or not _is_grbl(dialect):
+            if self._machine.driver_name:
+                try:
+                    driver_cls = get_driver_cls(self._machine.driver_name)
+                except (ValueError, ImportError):
+                    driver_cls = NoDeviceDriver
+            else:
+                driver_cls = NoDeviceDriver
+            driver_encoder, driver_encoder_config = (
+                driver_cls.create_encoder_context(self._machine)
+            )
         key = job_encode_key()
         token = self._encode_token(
             doc,
             step_tokens,
             machine_transform_token,
+            driver_encoder_config,
         )
-        stage = self._encode_stage(doc)
+        stage = self._encode_stage(doc, driver_encoder)
         out.append(self._make_request(key, token, stage))
 
     # ------------------------------------------------------------------
@@ -801,7 +817,11 @@ class IntentBuilder:
     # Encoder stage
     # ------------------------------------------------------------------
 
-    def _encode_stage(self, doc: Doc) -> EncodeSpec:
+    def _encode_stage(
+        self,
+        doc: Doc,
+        driver_encoder: Any = None,
+    ) -> EncodeSpec:
         """Build the encoder :class:`EncodeSpec` for the job encode
         node.
 
@@ -812,12 +832,12 @@ class IntentBuilder:
         :class:`PythonEncoder` wraps the driver-specific encoder
         callable.
         """
-        encoder = self._build_encoder(doc)
+        encoder = self._build_encoder(doc, driver_encoder)
         return EncodeSpec(
             source_key=job_machinexform_key(), encoder=Encoder(encoder)
         )
 
-    def _build_encoder(self, doc: Doc) -> Any:
+    def _build_encoder(self, doc: Doc, driver_encoder: Any = None) -> Any:
         """Resolve the encoder for the configured machine.
 
         Routes Grbl machines to the native Rust ``GcodeSpec`` and
@@ -834,7 +854,11 @@ class IntentBuilder:
             return self._grbl_encoder_spec(doc)
 
         return PythonEncoder(
-            self._make_python_encoder_callable(machine, doc),
+            self._make_python_encoder_callable(
+                machine,
+                doc,
+                driver_encoder,
+            ),
             "driver.encode",
         )
 
@@ -973,7 +997,10 @@ class IntentBuilder:
         return mappings
 
     def _make_python_encoder_callable(
-        self, machine: Machine, doc: Doc
+        self,
+        machine: Machine,
+        doc: Doc,
+        driver_encoder: Any = None,
     ) -> Callable[[Any], Any]:
         """Build a Python callable ``(ops) -> EncodeOutput`` that
         invokes the driver-specific encoder directly on
@@ -992,7 +1019,8 @@ class IntentBuilder:
         else:
             driver_cls = NoDeviceDriver
 
-        driver_encoder = driver_cls.create_encoder(machine)
+        if driver_encoder is None:
+            driver_encoder = driver_cls.create_encoder(machine)
 
         def encode(ops: Any) -> EncodeOutput:
             encoded = driver_encoder.encode(ops, machine, doc)
@@ -1020,6 +1048,7 @@ class IntentBuilder:
         doc: Doc,
         step_tokens: dict[str, int],
         machine_transform_token: int | None = None,
+        driver_encoder_config: Any = _ENCODER_CONFIG_UNSET,
     ) -> int:
         """Compute the version token for the job encode node.
 
@@ -1034,7 +1063,10 @@ class IntentBuilder:
         payload = {
             "kind": "encode",
             "mxform_token": machine_transform_token,
-            "machine": _machine_token_payload(self._machine),
+            "machine": _machine_token_payload(
+                self._machine,
+                driver_encoder_config,
+            ),
         }
         return _hash_int(payload)
 
@@ -1134,12 +1166,17 @@ def _is_grbl(dialect: GcodeDialect) -> bool:
     return dialect.uid == GRBL_DIALECT.uid
 
 
-def _machine_token_payload(machine: Machine | None) -> Any:
+def _machine_token_payload(
+    machine: Machine | None,
+    driver_encoder_config: Any = _ENCODER_CONFIG_UNSET,
+) -> Any:
     """Build a JSON-serialisable representation of the machine
     identity for the encode token."""
     if machine is None:
         return None
     driver_cls = get_driver_cls(machine.driver_name or "")
+    if driver_encoder_config is _ENCODER_CONFIG_UNSET:
+        driver_encoder_config = driver_cls.encoder_token_payload(machine)
     return {
         "driver_name": machine.driver_name,
         "active_wcs": machine.active_wcs,
@@ -1148,6 +1185,7 @@ def _machine_token_payload(machine: Machine | None) -> Any:
         "supports_arcs": machine.supports_arcs,
         "driver_accepts_curve_ops": driver_cls.accepts_curve_ops,
         "driver_accepts_arc_ops": driver_cls.accepts_arc_ops,
+        "driver_encoder_config": driver_encoder_config,
         "reverse_z_axis": machine.reverse_z_axis,
         "max_cut_speed": machine.max_cut_speed,
         "max_travel_speed": machine.max_travel_speed,

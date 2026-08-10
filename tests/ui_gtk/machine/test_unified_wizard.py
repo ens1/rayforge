@@ -412,6 +412,33 @@ def test_connection_page_next_requires_details(ui_context_initializer):
 
 
 @pytest.mark.ui
+def test_connection_page_preserves_zero_and_unset_ruida_powers(
+    ui_context_initializer,
+):
+    wizard = _make_wizard(ui_context_initializer)
+    profile = _profile(driver="RuidaSerialDriver")
+    profile.machine_config.driver_args = {
+        "port": "/dev/cu.ruida",
+        "laser_1_inactive_min_power_percent": 0,
+        "laser_1_inactive_max_power_percent": 0,
+        "laser_1_inactive_powers_confirmed": True,
+    }
+    wizard.profile = profile
+    wizard._navigate_to("connect")
+    page = wizard._get_page("connect")
+    assert isinstance(page, ConnectionPage)
+
+    values = page.connect_widget.get_values()
+
+    assert values["laser_1_inactive_min_power_percent"] == 0
+    assert values["laser_1_inactive_max_power_percent"] == 0
+    assert values["laser_1_inactive_powers_confirmed"] is True
+    assert values["laser_2_inactive_min_power_percent"] == -1
+    assert values["laser_2_inactive_max_power_percent"] == -1
+    assert values["laser_2_inactive_powers_confirmed"] is False
+
+
+@pytest.mark.ui
 def test_skip_button_only_on_optional_pages(ui_context_initializer):
     wizard = _make_wizard(ui_context_initializer)
     for name in ("ai_provider", "rotary", "camera"):

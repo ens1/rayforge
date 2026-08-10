@@ -14,7 +14,7 @@ from blinker import Signal
 from raygeo.ops.axis import Axis
 
 from ...context import RayforgeContext
-from ...core.varset import IntVar, VarSet
+from ...core.varset import FloatVar, IntVar, VarSet
 from ...shared.units.system import UnitSystem
 
 if TYPE_CHECKING:
@@ -155,35 +155,54 @@ class DeviceState:
 class PWMParams:
     """PWM configuration reported by a driver for a laser head."""
 
-    frequency: int
-    max_frequency: int
-    pulse_width: int
-    min_pulse_width: int
-    max_pulse_width: int
+    frequency: int | None
+    max_frequency: int | None
+    pulse_width: float | None
+    min_pulse_width: float | None
+    max_pulse_width: float | None
+    min_frequency: int | None = 1
+    frequency_zero_disables: bool = False
 
 
 def pwm_varset(params: PWMParams) -> VarSet:
     """Build the PWM frequency / pulse-width settings VarSet."""
-    return VarSet(
-        vars=[
+    variables = []
+    if params.frequency is not None:
+        if params.min_frequency is None or params.max_frequency is None:
+            raise ValueError("PWM frequency bounds must be provided")
+        minimum = 0 if params.frequency_zero_disables else params.min_frequency
+        description = _("PWM frequency in Hz")
+        if params.frequency_zero_disables:
+            description = _(
+                "0 disables; nonzero must be {minimum}–{maximum} Hz"
+            ).format(
+                minimum=params.min_frequency,
+                maximum=params.max_frequency,
+            )
+        variables.append(
             IntVar(
                 key="frequency",
                 label=_("Frequency"),
-                description=_("PWM frequency in Hz"),
+                description=description,
                 default=params.frequency,
-                min_val=1,
+                min_val=minimum,
                 max_val=params.max_frequency,
-            ),
-            IntVar(
+            )
+        )
+    if params.pulse_width is not None:
+        if params.min_pulse_width is None or params.max_pulse_width is None:
+            raise ValueError("PWM pulse-width bounds must be provided")
+        variables.append(
+            FloatVar(
                 key="pulse_width",
                 label=_("Pulse Width"),
                 description=_("Pulse width in microseconds"),
                 default=params.pulse_width,
                 min_val=params.min_pulse_width,
                 max_val=params.max_pulse_width,
-            ),
-        ]
-    )
+            )
+        )
+    return VarSet(vars=variables)
 
 
 class Driver(ABC):
@@ -378,6 +397,28 @@ class Driver(ABC):
         Factory method to return an OpsEncoder instance suitable for this
         driver class and the specific machine configuration.
         """
+
+    @classmethod
+    def encoder_token_payload(cls, machine: "Machine") -> Any:
+        """Return normalized driver-specific encoder cache inputs."""
+        del machine
+        return None
+
+    @classmethod
+    def create_encoder_context(
+        cls,
+        machine: "Machine",
+    ) -> tuple["OpsEncoder", Any]:
+        """Capture one encoder and its matching cache-token payload.
+
+        This default is safe only when encoder configuration is stateless.
+        Drivers with machine-derived encoder state must override this method
+        and capture both values atomically.
+        """
+        return (
+            cls.create_encoder(machine),
+            cls.encoder_token_payload(machine),
+        )
 
     @classmethod
     async def probe(

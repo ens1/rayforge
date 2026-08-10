@@ -9,6 +9,7 @@ from ....core.varset import HostnameVar, PortVar, VarSet
 from ....core.varset.hostnamevar import is_valid_hostname_or_ip
 from ..driver import DriverPrecheckError, DriverSetupError
 from .program_driver import RuidaProgramDriver
+from .ruida_encoder import ruida_job_profile_vars
 
 
 class RuidaUdpProgramDriver(RuidaProgramDriver):
@@ -48,6 +49,7 @@ class RuidaUdpProgramDriver(RuidaProgramDriver):
                     description=_("Local UDP response port"),
                     default=40200,
                 ),
+                *ruida_job_profile_vars(),
             ]
         )
 

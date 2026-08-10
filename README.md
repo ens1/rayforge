@@ -108,6 +108,35 @@ We also have a [Discord](https://discord.gg/sTHNdTtpQJ).
 | **Ruida**        | Network (UDP)           | Experimental `.rd` program transfer; no controller management or status. |
 | **OctoPrint**    | Network (HTTP API)      | Connect through an OctoPrint server.                                     |
 
+### Experimental Ruida Program Generation
+
+Rayforge compiles complete Ruida `.rd` programs through
+[ruida-re](https://github.com/ens1/ruida-re) and transfers them over USB
+serial or UDP. The conservative, hardware-observed `proven` profile remains
+the default. Advanced behavior must be enabled with an explicit research
+profile; those profiles are based on offline LightBurn 2.1.03 fixtures, have
+not been validated by hardware execution, emit a warning, and reject requests
+outside their narrow evidence before transfer.
+
+The opt-in profiles cover constant-power diagonal or cross-hatch planned-path
+raster, selecting either Ruida laser channel 1 or 2 (never both at once),
+vector Dwell from manual Ops or frame corner pauses, 10-20 kHz RF frequency,
+0-0.2 µs (0-200 ns) fiber pulse width, a balanced logical Z offset of up to
+±1 mm for one native raster layer, and reduced vector power at tabs. Research
+profiles are not composable. Rotary, cut-through controls, generic endpoint Z
+motion, stationary marking Pulse, and other unobserved combinations remain
+unsupported.
+
+Ruida drivers are transfer-only. They do not manage the controller or monitor
+job execution, so a successful transfer is not confirmation that cutting or
+engraving has finished. See the
+[firmware reference](website/docs/reference/firmware.md#ruida-controllers) for
+the exact profile scopes and lifecycle.
+
+Before releasing this integration, `ruida-re` 0.1.0 must be published; the
+repository pin used for development is not a substitute for the public package
+declared by Rayforge.
+
 ## Installation
 
 For installation instructions [refer to our homepage](https://rayforge.org/docs/getting-started/installation).

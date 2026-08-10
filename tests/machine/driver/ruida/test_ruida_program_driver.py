@@ -19,6 +19,7 @@ from rayforge.machine.driver.ruida.ruida_serial_driver import (
 from rayforge.machine.driver.ruida.ruida_udp_program_driver import (
     RuidaUdpProgramDriver,
 )
+from rayforge.machine.models.laser import Laser
 from rayforge.machine.transport import TransportStatus
 from rayforge.pipeline.encoder.base import EncodedOutput, MachineCodeOpMap
 
@@ -139,7 +140,7 @@ def fake_api(monkeypatch):
 def driver_objects():
     manager = SimpleNamespace(machines={})
     context = SimpleNamespace(machine_mgr=manager)
-    machine = SimpleNamespace(id="test-machine")
+    machine = SimpleNamespace(id="test-machine", driver_args={}, heads=[])
     return context, machine
 
 
@@ -169,6 +170,24 @@ def test_program_drivers_are_registered():
         len([driver for driver in drivers if driver is RuidaUdpProgramDriver])
         == 1
     )
+
+
+def test_program_setup_rejects_ambiguous_laser_tool_mapping(
+    fake_api,
+    driver_objects,
+):
+    context, machine = driver_objects
+    machine.heads = [Laser(), Laser()]
+    driver = RuidaSerialDriver(context, machine)
+
+    driver.setup(port="/dev/cu.ruida", baudrate=115200)
+
+    assert driver.state.error is not None
+    assert driver.state.error.title == (
+        "Ruida laser head tool numbers must be unique: "
+        "tool 0=Ruida channel 1 and tool 1=Ruida channel 2"
+    )
+    assert driver._transport is None
 
 
 @pytest.mark.asyncio

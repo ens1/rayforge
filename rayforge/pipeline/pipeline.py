@@ -75,7 +75,9 @@ class Pipeline:
         self._wp_handles: dict[tuple[str, str], BaseArtifactHandle] = {}
         self._step_handles: dict[str, BaseArtifactHandle] = {}
         self._last_aggregate_output: Any = None
+        self._last_aggregate_generation_id: int | None = None
         self._last_job_handle: BaseArtifactHandle | None = None
+        self._last_job_generation_id: int | None = None
 
         self.processing_state_changed = Signal()
         self.workpiece_starting = Signal()
@@ -145,6 +147,7 @@ class Pipeline:
         ctl.job_time_updated.connect(self._job_time_relay)
         ctl.rebuild_started.connect(self._on_rebuild_started)
         ctl.rebuild_finished.connect(self._on_rebuild_finished)
+        ctl.generation_invalidated.connect(self._on_generation_invalidated)
         ctl.data_stale.connect(self._on_data_stale)
         ctl.pipeline_error.connect(self._on_pipeline_error)
         ctl.pipeline_warnings.connect(self._on_pipeline_warnings)
@@ -164,8 +167,9 @@ class Pipeline:
         self._doc = new_doc
         self._wp_handles.clear()
         self._step_handles.clear()
-        self._last_job_handle = None
+        self._clear_last_job_handle()
         self._last_aggregate_output = None
+        self._last_aggregate_generation_id = None
         self._intent_ctl.set_doc(new_doc)
 
     @property
@@ -186,7 +190,7 @@ class Pipeline:
 
     @property
     def last_completed_handle(self) -> BaseArtifactHandle | None:
-        return self._last_job_handle
+        return self._current_job_handle()
 
     @property
     def auto_pipeline(self) -> bool:
@@ -240,6 +244,7 @@ class Pipeline:
             self._machine.changed.disconnect(self._on_machine_changed)
             self._machine.wcs_updated.disconnect(self._on_machine_changed)
         self._machine = machine
+        self._clear_last_job_handle()
         self._intent_ctl.set_machine(machine)
         machine.changed.connect(self._on_machine_changed)
         machine.wcs_updated.connect(self._on_machine_changed)
@@ -267,8 +272,9 @@ class Pipeline:
         self._intent_ctl.shutdown()
         self._wp_handles.clear()
         self._step_handles.clear()
-        self._last_job_handle = None
+        self._clear_last_job_handle()
         self._last_aggregate_output = None
+        self._last_aggregate_generation_id = None
 
     # ------------------------------------------------------------------
     # IntentController signal handlers
@@ -277,7 +283,29 @@ class Pipeline:
     def _on_machine_changed(self, sender, **kwargs) -> None:
         """Trigger a rebuild when the machine config changes (e.g.
         rotary mode, supports_curves, axis settings)."""
-        self._intent_ctl._schedule_rebuild()
+        self._intent_ctl.invalidate_and_schedule_rebuild()
+
+    def _on_generation_invalidated(
+        self,
+        sender,
+        *,
+        generation_id: int,
+    ) -> None:
+        del sender, generation_id
+        self._clear_last_job_handle()
+        self._last_aggregate_output = None
+        self._last_aggregate_generation_id = None
+
+    def _clear_last_job_handle(self) -> None:
+        if self._last_job_handle is not None:
+            self._store.release(self._last_job_handle)
+            self._last_job_handle = None
+        self._last_job_generation_id = None
+
+    def _current_job_handle(self) -> BaseArtifactHandle | None:
+        if self._last_job_generation_id != self._intent_ctl.generation_id:
+            self._clear_last_job_handle()
+        return self._last_job_handle
 
     def _on_rebuild_started(self, sender) -> None:
         self._set_busy(True)
@@ -363,8 +391,11 @@ class Pipeline:
     def _on_job_aggregate(self, sender, *, output, generation_id) -> None:
         if self._is_shutting_down:
             return
+        if generation_id != self._intent_ctl.generation_id:
+            return
         if output is not None:
             self._last_aggregate_output = output
+            self._last_aggregate_generation_id = generation_id
             time_est = output.time_estimate
             self.job_time_updated.send(self, total_seconds=time_est)
 
@@ -375,8 +406,13 @@ class Pipeline:
         handle,
         task_status,
         error: str | None = None,
+        generation_id: int | None = None,
     ) -> None:
         if self._is_shutting_down:
+            return
+        if generation_id is None:
+            generation_id = self._intent_ctl.generation_id
+        if generation_id != self._intent_ctl.generation_id:
             return
         if handle is None:
             self.job_generation_finished.send(
@@ -387,7 +423,11 @@ class Pipeline:
             )
             return
         agg = self._last_aggregate_output
-        if agg is None:
+        aggregate_generation = self._last_aggregate_generation_id
+        if agg is None or (
+            aggregate_generation is not None
+            and aggregate_generation != generation_id
+        ):
             logger.debug("Encode finished but no aggregate output cached")
             return
 
@@ -423,7 +463,7 @@ class Pipeline:
         artifact = JobArtifact(
             ops=ops,
             distance=distance,
-            generation_id=self._intent_ctl.generation_id,
+            generation_id=generation_id,
             time_estimate=agg.time_estimate,
             encoded_output=encoded,
             mapped_ops=mapped_ops,
@@ -432,6 +472,7 @@ class Pipeline:
             self._store.release(self._last_job_handle)
         job_handle = self._store.put(artifact, "job")
         self._last_job_handle = job_handle
+        self._last_job_generation_id = generation_id
         self.job_generation_finished.send(
             self, handle=job_handle, task_status=task_status
         )
@@ -460,7 +501,7 @@ class Pipeline:
         return self._store.get(handle)
 
     def get_existing_job_handle(self) -> BaseArtifactHandle | None:
-        return self._last_job_handle
+        return self._current_job_handle()
 
     # ------------------------------------------------------------------
     # Job generation
@@ -483,8 +524,9 @@ class Pipeline:
             when_done(None, RuntimeError("No document is loaded."))
             return
 
-        if self._last_job_handle is not None:
-            when_done(self._last_job_handle, None)
+        current_handle = self._current_job_handle()
+        if current_handle is not None:
+            when_done(current_handle, None)
             return
 
         if not self._can_generate_job():

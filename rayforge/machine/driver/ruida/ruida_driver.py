@@ -13,7 +13,6 @@ from ....core.varset import HostnameVar, PortVar, VarSet
 from ....core.varset.hostnamevar import is_valid_hostname_or_ip
 from ....pipeline.encoder.base import EncodedOutput, OpsEncoder
 from ...models.coordinate_system import CoordinateSystem
-from ...models.laser import LaserHead, LaserType
 from ...transport import TransportStatus
 from ...transport.udp import UdpTransport
 from ..driver import (
@@ -28,7 +27,12 @@ from ..driver import (
     PWMParams,
 )
 from .ruida_client import RuidaClient
-from .ruida_encoder import RuidaEncoder
+from .ruida_encoder import (
+    RuidaEncoder,
+    RuidaEncodingError,
+    ruida_job_profile_vars,
+    ruida_pwm_params,
+)
 from .ruida_transport import RuidaTransport
 
 if TYPE_CHECKING:
@@ -134,30 +138,36 @@ class RuidaDriver(Driver):
                     ),
                     default=50207,
                 ),
+                *ruida_job_profile_vars(),
             ]
         )
 
     def supports_pwm(self, head: "Head") -> bool:
-        return (
-            isinstance(head, LaserHead) and head.laser_type != LaserType.DIODE
-        )
+        return self.get_pwm_params(head) is not None
 
     def get_pwm_params(self, head: "Head") -> PWMParams | None:
-        if not isinstance(head, LaserHead) or not self.supports_pwm(head):
-            return None
-        return PWMParams(
-            frequency=head.pwm_frequency,
-            max_frequency=head.max_pwm_frequency,
-            pulse_width=head.pulse_width,
-            min_pulse_width=head.min_pulse_width,
-            max_pulse_width=head.max_pulse_width,
-        )
+        return ruida_pwm_params(self._machine, head)
 
     @classmethod
     def create_encoder(cls, machine: "Machine") -> "OpsEncoder":
-        return RuidaEncoder()
+        return RuidaEncoder.from_machine(machine)
+
+    @classmethod
+    def encoder_token_payload(cls, machine: "Machine") -> Any:
+        return RuidaEncoder.token_payload(machine)
+
+    @classmethod
+    def create_encoder_context(
+        cls,
+        machine: "Machine",
+    ) -> tuple["OpsEncoder", Any]:
+        return RuidaEncoder.context_from_machine(machine)
 
     def _setup_implementation(self, **kwargs: Any) -> None:
+        try:
+            RuidaEncoder.token_payload(self._machine)
+        except RuidaEncodingError as error:
+            raise DriverSetupError(str(error)) from error
         host = kwargs.get("host", "")
         port = kwargs.get("port", 50200)
         jog_port = kwargs.get("jog_port", 50207)

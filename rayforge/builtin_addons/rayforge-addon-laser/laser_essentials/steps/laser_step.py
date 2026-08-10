@@ -14,6 +14,7 @@ from raygeo.ops.state import AirAssistMode
 from rayforge.core.step import Step
 from rayforge.core.varset import (
     BoolVar,
+    FloatVar,
     SliderFloatVar,
     VarSet,
 )
@@ -37,7 +38,8 @@ class LaserStep(Step):
         self.air_assist: bool = False
         self.tab_power: float = 0.0
         self.frequency: int = 0
-        self.pulse_width: int = 0
+        self.pulse_width: float = 0.0
+        self.z_offset_mm: float = 0.0
         super().__init__(typelabel, name=name)
 
     @classmethod
@@ -73,6 +75,17 @@ class LaserStep(Step):
                     key="air_assist",
                     label=_("Air Assist"),
                     default=False,
+                ),
+                FloatVar(
+                    key="z_offset_mm",
+                    label=_("Logical Layer Z Offset"),
+                    description=_(
+                        "Balanced relative Z offset for encoders that "
+                        "support a layer-level Z envelope"
+                    ),
+                    default=0.0,
+                    min_val=-1.0,
+                    max_val=1.0,
                 ),
             ]
         )
@@ -116,17 +129,24 @@ class LaserStep(Step):
 
     def get_process_metadata(self, machine, layer=None) -> dict[str, Any]:
         metadata = super().get_process_metadata(machine, layer)
+        reduced_tab_power = self.power * self.tab_power
+        dynamic_tabs = (
+            0 < self.tab_power < 1 and reduced_tab_power != self.power
+        )
+        power_mode = "dynamic" if dynamic_tabs else "static"
+        minimum = reduced_tab_power if dynamic_tabs else self.power
         metadata.update(
             {
                 "power": {
-                    "mode": "static",
+                    "mode": power_mode,
                     "value": self.power,
-                    "min": self.power,
+                    "min": minimum,
                     "max": self.power,
                 },
                 "air_assist": self.air_assist,
                 "frequency_hz": self.frequency or None,
                 "pulse_width_us": self.pulse_width or None,
+                "z_offset_mm": self.z_offset_mm or None,
             }
         )
         return metadata
@@ -146,6 +166,7 @@ class LaserStep(Step):
             "tab_power": self.tab_power,
             "frequency": self.frequency,
             "pulse_width": self.pulse_width,
+            "z_offset_mm": self.z_offset_mm,
             "generated_workpiece_uid": self.generated_workpiece_uid,
         }
 
@@ -166,6 +187,7 @@ class LaserStep(Step):
                 "tab_power": self.tab_power,
                 "frequency": self.frequency,
                 "pulse_width": self.pulse_width,
+                "z_offset_mm": self.z_offset_mm,
             }
         )
         return params
@@ -176,6 +198,22 @@ class LaserStep(Step):
         if isinstance(head, LaserHead):
             return head
         return None
+
+    def apply_pwm_defaults(
+        self,
+        machine: "Machine",
+        head: LaserHead,
+    ) -> None:
+        """Apply supported PWM defaults to evidenced vector processes."""
+        if self.PROCESS_KIND != "vector":
+            return
+        params = machine.get_pwm_params(head)
+        if params is None:
+            return
+        if params.frequency is not None:
+            self.frequency = params.frequency
+        if params.pulse_width is not None:
+            self.pulse_width = params.pulse_width
 
     def set_power(self, power: float):
         if not (0.0 <= power <= 1.0):
@@ -201,9 +239,17 @@ class LaserStep(Step):
             self.frequency = int(frequency)
             self.updated.send(self)
 
-    def set_pulse_width(self, width: int):
+    def set_pulse_width(self, width: float):
         if self.pulse_width != width:
-            self.pulse_width = int(width)
+            self.pulse_width = float(width)
+            self.updated.send(self)
+
+    def set_z_offset_mm(self, offset: float):
+        offset = float(offset)
+        if not -1.0 <= offset <= 1.0:
+            raise ValueError("Logical layer Z offset must be within 1 mm")
+        if self.z_offset_mm != offset:
+            self.z_offset_mm = offset
             self.updated.send(self)
 
     def get_summary(self) -> str:
@@ -229,6 +275,7 @@ class LaserStep(Step):
                 "tab_power": self.tab_power,
                 "frequency": self.frequency,
                 "pulse_width": self.pulse_width,
+                "z_offset_mm": self.z_offset_mm,
             }
         )
         return result
@@ -242,6 +289,7 @@ class LaserStep(Step):
         step.tab_power = data.get("tab_power", step.tab_power)
         step.frequency = data.get("frequency", step.frequency)
         step.pulse_width = data.get("pulse_width", step.pulse_width)
+        step.z_offset_mm = data.get("z_offset_mm", step.z_offset_mm)
         return step
 
     @classmethod
@@ -254,5 +302,6 @@ class LaserStep(Step):
                 "tab_power",
                 "frequency",
                 "pulse_width",
+                "z_offset_mm",
             }
         )

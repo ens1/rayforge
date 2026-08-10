@@ -14,7 +14,7 @@ from rayforge.ui_gtk.doceditor.step_settings.rows import (
 
 from ..rows.air_assist_row import AirAssistRow
 from ..rows.power_row import PowerRow
-from ..rows.pwm_row import FrequencyRow, PulseWidthRow
+from ..rows.pwm_row import FrequencyRow, PulseWidthRow, ZOffsetRow
 from ..rows.tab_power_row import TabPowerRow
 
 if TYPE_CHECKING:
@@ -62,17 +62,56 @@ class LaserSettingsPage(StepSettingsPage):
             _("Machine"),
             FrequencyRow,
             PulseWidthRow,
+            ZOffsetRow,
             description=_(
                 "Settings provided by the machine's hardware for this head."
             ),
         )
         step.updated.connect(self._update_machine_section_visibility)
+        self._settings_machine = self.get_machine()
+        if self._settings_machine is not None:
+            self._settings_machine.changed.connect(
+                self._on_machine_config_changed
+            )
         self._update_machine_section_visibility()
+
+    def _on_machine_config_changed(self, *args):
+        self._sync_widgets_to_model()
+        self._update_machine_section_visibility()
+
+    def _cleanup(self):
+        if self._settings_machine is not None:
+            self._settings_machine.changed.disconnect(
+                self._on_machine_config_changed
+            )
+        super()._cleanup()
 
     def _update_machine_section_visibility(self, *args):
         machine = self.get_machine()
         head = self.get_selected_head()
-        supported = bool(machine and head and machine.get_pwm_params(head))
+        pwm_supported = bool(
+            self.step.PROCESS_KIND == "vector"
+            and machine
+            and head
+            and machine.get_pwm_params(head)
+        )
+        z_supported = bool(
+            machine
+            and self.step.PROCESS_KIND == "raster"
+            and machine.driver_name
+            in {
+                "RuidaDriver",
+                "RuidaSerialDriver",
+                "RuidaUdpProgramDriver",
+            }
+            and machine.driver_args.get("job_profile") == "z-research"
+        )
+        stale_values = bool(
+            self.step.frequency
+            or self.step.pulse_width
+            or self.step.z_offset_mm
+        )
+        supported = pwm_supported or z_supported or stale_values
         self.machine_section.set_visible(supported)
 
     def _on_head_changed(self, sender, head_uid):
@@ -93,24 +132,30 @@ class LaserSettingsPage(StepSettingsPage):
                 )
             )
             if isinstance(head, LaserHead):
-                params = machine.get_pwm_params(head) if machine else None
+                params = (
+                    machine.get_pwm_params(head)
+                    if machine and step.PROCESS_KIND == "vector"
+                    else None
+                )
                 if params is not None:
-                    t.execute(
-                        ChangePropertyCommand(
-                            target=step,
-                            property_name="frequency",
-                            new_value=params.frequency,
-                            setter_method_name="set_frequency",
+                    if params.frequency is not None:
+                        t.execute(
+                            ChangePropertyCommand(
+                                target=step,
+                                property_name="frequency",
+                                new_value=params.frequency,
+                                setter_method_name="set_frequency",
+                            )
                         )
-                    )
-                    t.execute(
-                        ChangePropertyCommand(
-                            target=step,
-                            property_name="pulse_width",
-                            new_value=params.pulse_width,
-                            setter_method_name="set_pulse_width",
+                    if params.pulse_width is not None:
+                        t.execute(
+                            ChangePropertyCommand(
+                                target=step,
+                                property_name="pulse_width",
+                                new_value=params.pulse_width,
+                                setter_method_name="set_pulse_width",
+                            )
                         )
-                    )
 
 
 class LaserStepSettingsPage(StepSettingsPage):

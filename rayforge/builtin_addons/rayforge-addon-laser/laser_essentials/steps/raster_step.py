@@ -499,10 +499,7 @@ class EngraveStep(LaserStep):
         # the operation's typical feed rate (engraving is faster than
         # cutting).
         step.cut_speed = min(machine.max_cut_speed, 4000)
-        params = machine.get_pwm_params(default_head)
-        if params is not None:
-            step.frequency = params.frequency
-            step.pulse_width = params.pulse_width
+        step.apply_pwm_defaults(machine, default_head)
 
         OverscanTransformer = cast(
             "OverscanTransformerType",

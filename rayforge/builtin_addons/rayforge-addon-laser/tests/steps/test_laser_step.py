@@ -3,7 +3,12 @@
 from unittest.mock import MagicMock
 
 import pytest
-from laser_essentials.steps import ContourStep, EngraveStep, LaserStep
+from laser_essentials.steps import (
+    ContourStep,
+    EngraveStep,
+    LaserStep,
+    MaterialTestStep,
+)
 
 from rayforge.core.step import Step
 from rayforge.machine.driver.driver import PWMParams, pwm_varset
@@ -204,6 +209,25 @@ def test_set_pulse_width():
     handler.assert_called_once_with(s)
 
 
+def test_fractional_microsecond_pulse_width_round_trips():
+    step = ContourStep(name="fiber")
+    step.set_pulse_width(0.1)
+    restored = ContourStep.from_dict(step.to_dict())
+
+    assert step.pulse_width == pytest.approx(0.1)
+    assert restored.pulse_width == pytest.approx(0.1)
+
+
+def test_logical_z_offset_is_typed_and_serialized():
+    step = EngraveStep(name="offset")
+    step.set_z_offset_mm(-0.5)
+    restored = EngraveStep.from_dict(step.to_dict())
+
+    assert restored.z_offset_mm == pytest.approx(-0.5)
+    with pytest.raises(ValueError, match="within 1 mm"):
+        step.set_z_offset_mm(1.001)
+
+
 def test_setters_no_signal_on_same_value():
     s = ContourStep(name="t")
     handler = MagicMock()
@@ -284,6 +308,34 @@ def test_create_applies_head_pwm_defaults():
     s = ContourStep.create(context, name="t")
     assert s.frequency == 1000
     assert s.pulse_width == 50
+
+
+@pytest.mark.parametrize("step_cls", [EngraveStep, MaterialTestStep])
+def test_nonvector_create_does_not_apply_pwm_defaults(step_cls):
+    context = MagicMock()
+    machine = MagicMock()
+    machine.max_cut_speed = 5000
+    machine.max_travel_speed = 10000
+    machine.acceleration = 3000
+    head = MagicMock(spec=LaserHead)
+    head.uid = "laser-1"
+    head.spot_size_mm = (0.1, 0.1)
+    machine.get_default_laser_head.return_value = head
+    machine.get_pwm_params.return_value = PWMParams(
+        frequency=10_000,
+        min_frequency=10_000,
+        max_frequency=20_000,
+        pulse_width=None,
+        min_pulse_width=None,
+        max_pulse_width=None,
+    )
+    context.machine = machine
+
+    step = step_cls.create(context, name="nonvector")
+
+    assert step.frequency == 0
+    assert step.pulse_width == 0
+    machine.get_pwm_params.assert_not_called()
 
 
 def test_laser_step_uses_cut_color():

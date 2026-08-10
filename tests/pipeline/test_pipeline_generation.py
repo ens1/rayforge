@@ -312,7 +312,8 @@ class TestPipelineGeneration:
             weak=False,
         )
 
-        with pytest.raises(RuntimeError, match="Ops power disagree"):
+        expected = "Reduced positive vector power requires"
+        with pytest.raises(RuntimeError, match=expected):
             await asyncio.wait_for(
                 pipeline.generate_job_artifact_async(), timeout=10
             )
@@ -327,7 +328,7 @@ class TestPipelineGeneration:
         ]
         assert any(value == pytest.approx(0.2) for value in powers)
         assert any(value == pytest.approx(0.8) for value in powers)
-        assert any("Ops power disagree" in message for message in errors)
+        assert any(expected in message for message in errors)
 
     @pytest.mark.asyncio
     async def test_generate_job_artifact_async_already_running(

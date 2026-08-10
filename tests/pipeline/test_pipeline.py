@@ -227,6 +227,58 @@ class TestPipeline:
             await asyncio.wait_for(generation, timeout=1)
         pipeline._intent_ctl.force_rebuild.assert_called_once_with()
 
+    def test_profile_invalidation_discards_delayed_encode_before_generate(
+        self,
+        doc,
+        real_workpiece,
+        mock_task_mgr,
+        mocker,
+        context_initializer,
+        contour_step_class,
+    ):
+        layer = self._setup_doc_with_workpiece(doc, real_workpiece)
+        assert layer.workflow is not None
+        layer.workflow.add_step(contour_step_class.create(context_initializer))
+        machine = context_initializer.machine
+        pipeline = Pipeline(
+            doc,
+            mock_task_mgr,
+            context_initializer.artifact_store,
+            machine,
+        )
+        old_generation = pipeline.data_generation_id
+        pipeline._on_job_aggregate(
+            None,
+            output=SimpleNamespace(ops=Ops(), time_estimate=1.0),
+            generation_id=old_generation,
+        )
+        delayed = EncodeOutput.MachineCode(
+            text="old profile",
+            op_to_machine_code=[],
+            machine_code_to_op=[],
+            payload=b"old",
+        )
+        pipeline._intent_ctl._schedule_rebuild = MagicMock()
+        mocker.patch("rayforge.machine.models.machine.task_mgr.add_coroutine")
+
+        machine.set_driver_args(
+            {**machine.driver_args, "job_profile": "rf-research"}
+        )
+        assert pipeline.data_generation_id > old_generation
+        pipeline._on_job_encoded(
+            None,
+            handle=delayed,
+            task_status="completed",
+            generation_id=old_generation,
+        )
+
+        assert pipeline.last_completed_handle is None
+        pipeline._intent_ctl.force_rebuild = MagicMock()
+        callback = MagicMock()
+        pipeline.generate_job_artifact(callback)
+        callback.assert_not_called()
+        pipeline._intent_ctl.force_rebuild.assert_called_once_with()
+
     def test_wcs_update_schedules_rebuild_and_disconnects_on_shutdown(
         self, doc, mock_task_mgr, context_initializer
     ):

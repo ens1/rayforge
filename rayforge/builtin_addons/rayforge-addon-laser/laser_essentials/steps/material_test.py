@@ -268,8 +268,5 @@ class MaterialTestStep(LaserStep):
         step.selected_head_uid = default_head.uid
         step.max_cut_speed = machine.max_cut_speed
         step.max_travel_speed = machine.max_travel_speed
-        params = machine.get_pwm_params(default_head)
-        if params is not None:
-            step.frequency = params.frequency
-            step.pulse_width = params.pulse_width
+        step.apply_pwm_defaults(machine, default_head)
         return step

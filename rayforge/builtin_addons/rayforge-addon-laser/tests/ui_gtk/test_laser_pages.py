@@ -20,11 +20,13 @@ from laser_essentials.widgets.material_test_grid_page import (
 from laser_essentials.widgets.raster_page import RasterSettingsPage
 from laser_essentials.widgets.rows import (
     AirAssistRow,
+    FrequencyRow,
     OffsetRow,
     PowerRow,
 )
 
 from rayforge.core.step_registry import step_registry
+from rayforge.machine.driver.driver import PWMParams
 from rayforge.ui_gtk.doceditor.step_settings.dialog import StepSettingsDialog
 from rayforge.ui_gtk.doceditor.step_settings.pages import StepSettingsPage
 from rayforge.ui_gtk.doceditor.step_settings.rows import (
@@ -117,6 +119,77 @@ def test_head_change_does_not_touch_offset(editor, laser_machine, ui_context):
     )
     assert step.selected_head_uid == target.uid
     assert step.offset_mm == offset_before
+
+
+@pytest.mark.ui
+def test_rf_frequency_zero_remains_visible_as_disabled(
+    editor,
+    laser_machine,
+    ui_context,
+    mocker,
+):
+    step = _contour_step(ui_context)
+    step.frequency = 0
+    mocker.patch.object(
+        laser_machine,
+        "get_pwm_params",
+        return_value=PWMParams(
+            frequency=20_000,
+            min_frequency=10_000,
+            max_frequency=20_000,
+            frequency_zero_disables=True,
+            pulse_width=None,
+            min_pulse_width=None,
+            max_pulse_width=None,
+        ),
+    )
+
+    page = ContourStepSettingsPage(editor, step).laser_page()
+    frequency = _find(page, FrequencyRow)
+    adjustment = frequency.widget.get_adjustment()
+
+    assert step.frequency == 0
+    assert frequency.widget.get_value() == 0
+    assert adjustment.get_lower() == 0
+    assert adjustment.get_upper() == 20_000
+    assert frequency.widget.get_subtitle() == (
+        "0 disables; nonzero must be 10,000–20,000 Hz"
+    )
+
+
+@pytest.mark.ui
+def test_raster_head_switch_does_not_apply_vector_pwm_defaults(
+    editor,
+    laser_machine,
+    ui_context,
+    mocker,
+):
+    params = PWMParams(
+        frequency=20_000,
+        min_frequency=10_000,
+        max_frequency=20_000,
+        frequency_zero_disables=True,
+        pulse_width=None,
+        min_pulse_width=None,
+        max_pulse_width=None,
+    )
+    get_pwm_params = mocker.patch.object(
+        laser_machine,
+        "get_pwm_params",
+        return_value=params,
+    )
+    step_cls = step_registry.get("EngraveStep")
+    assert step_cls is not None
+    step: Any = step_cls.create(ui_context)
+    page = RasterSettingsPage(editor, step).laser_page()
+
+    target = laser_machine.heads[1]
+    page.head_row.head_changed.send(page.head_row, head_uid=target.uid)
+
+    assert step.selected_head_uid == target.uid
+    assert step.frequency == 0
+    assert step.pulse_width == 0
+    get_pwm_params.assert_not_called()
 
 
 @pytest.mark.ui

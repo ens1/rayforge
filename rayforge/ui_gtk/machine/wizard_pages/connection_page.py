@@ -83,7 +83,7 @@ class ConnectionPage(WizardPage):
         saved_args = profile.machine_config.driver_args or {}
         if saved_args:
             for var in var_set:
-                if saved_args.get(var.key):
+                if var.key in saved_args and saved_args[var.key] is not None:
                     var.value = saved_args[var.key]
         self.connect_widget.populate(var_set)
         self._refresh_ready()

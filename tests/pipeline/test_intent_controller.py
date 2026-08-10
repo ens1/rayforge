@@ -179,6 +179,7 @@ def test_signal_triggers_debounced_rebuild(isolated_machine):
     tm = FakeTaskManager()
     ctrl = IntentController(doc, tm, machine=isolated_machine)
     ctrl.connect()
+    initial_generation = ctrl.generation_id
 
     # Trigger a change and verify a debounced call is scheduled.
     wp.updated.send(wp)
@@ -188,7 +189,7 @@ def test_signal_triggers_debounced_rebuild(isolated_machine):
     # Fire the debounced callback and verify the intent was built.
     tm.fire_latest()
     assert ctrl.intent is not None
-    assert ctrl.generation_id == 1
+    assert ctrl.generation_id > initial_generation
     ctrl.shutdown()
 
 
@@ -199,6 +200,7 @@ def test_second_change_reschedules_debounce(isolated_machine):
     tm = FakeTaskManager()
     ctrl = IntentController(doc, tm, machine=isolated_machine)
     ctrl.connect()
+    initial_generation = ctrl.generation_id
 
     wp.updated.send(wp)
     timer = ctrl._rebuild_timer
@@ -208,7 +210,7 @@ def test_second_change_reschedules_debounce(isolated_machine):
     assert timer.cancelled
     assert len(tm.delayed) == 2
     tm.fire_latest()
-    assert ctrl.generation_id == 1
+    assert ctrl.generation_id > initial_generation
     ctrl.shutdown()
 
 
@@ -338,7 +340,7 @@ def test_on_completed_superseded_generation_discarded(
     ctrl._on_completed(current)
     assert len(idle_calls) == 1
     _fn, args = idle_calls[0]
-    assert isinstance(args, tuple) and len(args) == 3
+    assert isinstance(args, tuple) and len(args) == 4
     ctrl.shutdown()
 
 
@@ -380,10 +382,11 @@ def test_on_completed_reaches_correct_doc_item(monkeypatch, isolated_machine):
     ctrl._on_completed(node)
     assert len(idle_calls) == 1
     _fn, args = idle_calls[0]
-    key, item, output = args
+    key, item, output, generation_id = args
     assert key == wpk
     assert item is wp
     assert output == "ok"
+    assert generation_id == ctrl.generation_id
     ctrl.shutdown()
 
 
@@ -581,6 +584,7 @@ def test_job_encode_terminal_error_completes_generation_once(
             "handle": None,
             "task_status": expected_status,
             "error": expected_message,
+            "generation_id": ctrl.generation_id,
         }
     ]
     if error_kind == ErrorKind.OTHER:

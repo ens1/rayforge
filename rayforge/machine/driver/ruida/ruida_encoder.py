@@ -8,6 +8,7 @@ import math
 import sys
 from collections.abc import Iterator
 from dataclasses import dataclass, field
+from decimal import Decimal
 from functools import lru_cache
 from gettext import gettext as _
 from typing import TYPE_CHECKING, Any, Literal
@@ -32,6 +33,95 @@ _WIRE_COORDINATE_SCALE = 1000
 _U8_POWER_TOLERANCE = 0.5 / 255 + 1e-12
 _PROCESS_SCHEMA = "rayforge.process"
 _PROCESS_VERSION = 1
+_UNSET_INACTIVE_POWER = -1.0
+_HEAD_MAPPING_ERROR = (
+    "Ruida laser head tool numbers must be unique: tool 0=Ruida channel 1 "
+    "and tool 1=Ruida channel 2"
+)
+RUIDA_JOB_PROFILE_KEY = "job_profile"
+DEFAULT_RUIDA_JOB_PROFILE = "proven"
+RUIDA_JOB_PROFILES = (
+    DEFAULT_RUIDA_JOB_PROFILE,
+    "planned-path-research",
+    "dual-laser-research",
+    "stationary-research",
+    "rf-research",
+    "fiber-research",
+    "z-research",
+    "dynamic-power-research",
+)
+RUIDA_INACTIVE_POWER_KEYS = {
+    1: (
+        "laser_1_inactive_min_power_percent",
+        "laser_1_inactive_max_power_percent",
+    ),
+    2: (
+        "laser_2_inactive_min_power_percent",
+        "laser_2_inactive_max_power_percent",
+    ),
+}
+RUIDA_INACTIVE_POWER_CONFIRMED_KEYS = {
+    1: "laser_1_inactive_powers_confirmed",
+    2: "laser_2_inactive_powers_confirmed",
+}
+
+_PROFILE_EXPORTS = {
+    "proven": "LIGHTBURN_2103_644XS",
+    "planned-path-research": ("LIGHTBURN_2103_644XS_PLANNED_PATH_RESEARCH"),
+    "dual-laser-research": ("LIGHTBURN_2103_644XS_DUAL_LASER_RESEARCH"),
+    "stationary-research": ("LIGHTBURN_2103_644XS_STATIONARY_RESEARCH"),
+    "rf-research": "LIGHTBURN_2103_644XS_RF_RESEARCH",
+    "fiber-research": "LIGHTBURN_2103_644XS_FIBER_RESEARCH",
+    "z-research": "LIGHTBURN_2103_644XS_Z_RESEARCH",
+    "dynamic-power-research": ("LIGHTBURN_2103_644XS_DYNAMIC_POWER_RESEARCH"),
+}
+
+
+@dataclass(frozen=True)
+class _RuidaEncoderConfig:
+    profile_name: str
+    inactive_channel_powers: tuple[
+        tuple[float | None, float | None],
+        tuple[float | None, float | None],
+    ]
+    inactive_channel_powers_confirmed: tuple[bool, bool]
+    head_mappings: tuple[tuple[str, int, str | None], ...]
+
+    def token_payload(self) -> dict[str, Any]:
+        return {
+            RUIDA_JOB_PROFILE_KEY: self.profile_name,
+            "inactive_channel_powers_confirmed": {
+                str(index): value
+                for index, value in enumerate(
+                    self.inactive_channel_powers_confirmed,
+                    start=1,
+                )
+            },
+            "inactive_channel_powers": {
+                str(index): list(values)
+                for index, values in enumerate(
+                    self.inactive_channel_powers,
+                    start=1,
+                )
+            },
+            "head_mappings": [
+                {
+                    "uid": uid,
+                    "tool_number": tool_number,
+                    "laser_type": laser_type,
+                }
+                for uid, tool_number, laser_type in self.head_mappings
+            ],
+        }
+
+    def inactive_power(
+        self,
+        index: int,
+    ) -> tuple[float | None, float | None]:
+        return self.inactive_channel_powers[index - 1]
+
+    def inactive_power_confirmed(self, index: int) -> bool:
+        return self.inactive_channel_powers_confirmed[index - 1]
 
 
 class RuidaEncodingError(ValueError):
@@ -40,12 +130,17 @@ class RuidaEncodingError(ValueError):
 
 @dataclass(frozen=True)
 class _RuidaApi:
+    Dwell: Any
     JobPlan: Any
+    LaserChannelPlan: Any
     LayerPlan: Any
     MarkTo: Any
+    MarkWithPower: Any
+    RasterSection: Any
     RuidaJobCompiler: Any
     SetModulation: Any
     TravelTo: Any
+    profiles: dict[str, Any]
 
 
 @lru_cache(maxsize=1)
@@ -59,19 +154,275 @@ def _load_ruida_api() -> _RuidaApi:
             f"and Python 3.11 or newer; running Python {version}"
         ) from error
 
-    required = (
+    core_names = (
+        "Dwell",
         "JobPlan",
+        "LaserChannelPlan",
         "LayerPlan",
         "MarkTo",
+        "MarkWithPower",
+        "RasterSection",
         "RuidaJobCompiler",
         "SetModulation",
         "TravelTo",
     )
+    required = (*core_names, *_PROFILE_EXPORTS.values())
     missing = [name for name in required if not hasattr(module, name)]
     if missing:
         names = ", ".join(missing)
         raise RuntimeError(f"Installed ruida-re lacks required API: {names}")
-    return _RuidaApi(**{name: getattr(module, name) for name in required})
+    profiles = {
+        name: getattr(module, export)
+        for name, export in _PROFILE_EXPORTS.items()
+    }
+    return _RuidaApi(
+        **{name: getattr(module, name) for name in core_names},
+        profiles=profiles,
+    )
+
+
+def normalize_ruida_job_profile(value: object) -> str:
+    """Validate and normalize one persisted Ruida job profile name."""
+    if value is None:
+        return DEFAULT_RUIDA_JOB_PROFILE
+    if not isinstance(value, str) or value not in RUIDA_JOB_PROFILES:
+        raise RuidaEncodingError(f"Unsupported Ruida job profile {value!r}")
+    return value
+
+
+def ruida_job_profile_from_machine(machine: Machine) -> str:
+    """Return the explicitly configured job profile for a machine."""
+    return normalize_ruida_job_profile(
+        machine.driver_args.get(
+            RUIDA_JOB_PROFILE_KEY,
+            DEFAULT_RUIDA_JOB_PROFILE,
+        )
+    )
+
+
+def ruida_pwm_params(machine: Machine, head: Any) -> Any | None:
+    """Return profile-scoped PWM fields for one Ruida laser head."""
+    from ...models.laser import LaserHead, LaserType
+    from ..driver import PWMParams
+
+    if not isinstance(head, LaserHead) or head.laser_type == LaserType.DIODE:
+        return None
+    profile = ruida_job_profile_from_machine(machine)
+    if profile == "rf-research":
+        frequency = min(max(head.pwm_frequency, 10_000), 20_000)
+        return PWMParams(
+            frequency=frequency,
+            min_frequency=10_000,
+            max_frequency=20_000,
+            frequency_zero_disables=True,
+            pulse_width=None,
+            min_pulse_width=None,
+            max_pulse_width=None,
+        )
+    if profile == "fiber-research":
+        if head.laser_type != LaserType.FIBER:
+            return None
+        pulse_width = min(max(float(head.pulse_width), 0.0), 0.2)
+        return PWMParams(
+            frequency=None,
+            min_frequency=None,
+            max_frequency=None,
+            pulse_width=pulse_width,
+            min_pulse_width=0.0,
+            max_pulse_width=0.2,
+        )
+    return None
+
+
+def ruida_encoder_token_payload(machine: Machine) -> dict[str, Any]:
+    """Return all machine fields that affect Ruida plan adaptation."""
+    return _snapshot_ruida_encoder_config(machine).token_payload()
+
+
+def _snapshot_ruida_encoder_config(
+    machine: Machine,
+    profile: str | None = None,
+) -> _RuidaEncoderConfig:
+    from ...models.laser import LaserHead
+
+    profile_name = (
+        ruida_job_profile_from_machine(machine)
+        if profile is None
+        else normalize_ruida_job_profile(profile)
+    )
+    channel_config = _channel_config_payload(machine.driver_args)
+    laser_heads = [
+        head for head in machine.heads if isinstance(head, LaserHead)
+    ]
+    tool_numbers = [head.tool_number for head in laser_heads]
+    if any(
+        isinstance(tool_number, bool)
+        or not isinstance(tool_number, int)
+        or tool_number not in (0, 1)
+        for tool_number in tool_numbers
+    ):
+        raise RuidaEncodingError(_HEAD_MAPPING_ERROR)
+    if len(set(tool_numbers)) != len(tool_numbers):
+        raise RuidaEncodingError(_HEAD_MAPPING_ERROR)
+    heads = tuple(
+        sorted(
+            (
+                (
+                    head.uid,
+                    head.tool_number,
+                    getattr(
+                        getattr(head, "laser_type", None),
+                        "value",
+                        None,
+                    ),
+                )
+                for head in laser_heads
+            ),
+            key=lambda item: (item[0], item[1]),
+        )
+    )
+    return _RuidaEncoderConfig(
+        profile_name=profile_name,
+        inactive_channel_powers=(
+            (channel_config["1"][0], channel_config["1"][1]),
+            (channel_config["2"][0], channel_config["2"][1]),
+        ),
+        inactive_channel_powers_confirmed=(
+            _confirmed_channel_config(machine.driver_args, 1),
+            _confirmed_channel_config(machine.driver_args, 2),
+        ),
+        head_mappings=heads,
+    )
+
+
+def ruida_job_profile_vars() -> list[Any]:
+    """Return persisted setup fields for the Ruida compiler profile."""
+    from ....core.varset import BoolVar, FloatVar, LabeledChoiceVar
+
+    research = _("Offline research; not hardware-validated")
+    choices = [
+        (_("Proven LightBurn 2.1.03 / Ruida 644XS"), "proven"),
+        (
+            f"{research}: " + _("planned-path raster"),
+            "planned-path-research",
+        ),
+        (
+            f"{research}: "
+            + _("one selected channel; no simultaneous dual-head output"),
+            "dual-laser-research",
+        ),
+        (
+            f"{research}: " + _("stationary dwell (manual Ops/frame only)"),
+            "stationary-research",
+        ),
+        (
+            f"{research}: "
+            + _("RF frequency (profile selection confirms RF hardware)"),
+            "rf-research",
+        ),
+        (f"{research}: " + _("fiber pulse width"), "fiber-research"),
+        (
+            f"{research}: " + _("logical raster layer Z offset"),
+            "z-research",
+        ),
+        (
+            f"{research}: " + _("dynamic vector power"),
+            "dynamic-power-research",
+        ),
+    ]
+    fields: list[Any] = [
+        LabeledChoiceVar(
+            key=RUIDA_JOB_PROFILE_KEY,
+            label=_("Ruida Job Profile"),
+            choices=choices,
+            description=_(
+                "Advanced profiles come from offline producer fixtures and "
+                "have not been validated on hardware"
+            ),
+            default=DEFAULT_RUIDA_JOB_PROFILE,
+            allow_none=False,
+        )
+    ]
+    for index, keys in RUIDA_INACTIVE_POWER_KEYS.items():
+        for bound, key in zip((_("minimum"), _("maximum")), keys):
+            fields.append(
+                FloatVar(
+                    key=key,
+                    label=_(
+                        "Laser {index} inactive stored {bound} power (%)"
+                    ).format(index=index, bound=bound),
+                    description=_(
+                        "Required for an explicit two-channel research "
+                        "profile; -1 means unset, otherwise enter the "
+                        "controller's known stored value"
+                    ),
+                    default=_UNSET_INACTIVE_POWER,
+                    min_val=_UNSET_INACTIVE_POWER,
+                    max_val=100,
+                )
+            )
+        fields.append(
+            BoolVar(
+                key=RUIDA_INACTIVE_POWER_CONFIRMED_KEYS[index],
+                label=_("Confirm laser {index} inactive powers").format(
+                    index=index
+                ),
+                description=_(
+                    "Confirms that this channel's inactive minimum and "
+                    "maximum power values were intentionally entered for "
+                    "the selected offline research profile"
+                ),
+                default=False,
+            )
+        )
+    return fields
+
+
+def _confirmed_channel_config(
+    driver_args: dict[str, Any],
+    index: int,
+) -> bool:
+    value = driver_args.get(
+        RUIDA_INACTIVE_POWER_CONFIRMED_KEYS[index],
+        False,
+    )
+    if not isinstance(value, bool):
+        raise RuidaEncodingError(
+            f"Inactive laser {index} power confirmation must be boolean"
+        )
+    return value
+
+
+def _channel_config_payload(
+    driver_args: dict[str, Any],
+) -> dict[str, list[float | None]]:
+    result: dict[str, list[float | None]] = {}
+    for index, (minimum_key, maximum_key) in RUIDA_INACTIVE_POWER_KEYS.items():
+        minimum = _optional_power_percent(
+            driver_args.get(minimum_key),
+            f"inactive laser {index} minimum power",
+        )
+        maximum = _optional_power_percent(
+            driver_args.get(maximum_key),
+            f"inactive laser {index} maximum power",
+        )
+        if minimum is not None and maximum is not None and minimum > maximum:
+            raise RuidaEncodingError(
+                f"Inactive laser {index} minimum power cannot exceed maximum"
+            )
+        result[str(index)] = [minimum, maximum]
+    return result
+
+
+def _optional_power_percent(value: object, label: str) -> float | None:
+    if value is None:
+        return None
+    result = _finite_number(value, label)
+    if result == _UNSET_INACTIVE_POWER:
+        return None
+    if not 0 <= result <= 100:
+        raise RuidaEncodingError(f"{label} must be between 0 and 100")
+    return result
 
 
 @dataclass(frozen=True)
@@ -90,6 +441,7 @@ class _ProcessMetadata:
     color_rgb: int
     frequency_hz: int | None
     pulse_width_us: float | None
+    z_offset_mm: float | None
     raster_depth_mode: str | None
     raster_mode: str | None
     raster_min_power: float | None
@@ -194,6 +546,10 @@ class _ProcessMetadata:
                 data.get("pulse_width_us"),
                 "pulse width",
             ),
+            z_offset_mm=_optional_number(
+                data.get("z_offset_mm"),
+                "logical layer Z offset",
+            ),
             raster_depth_mode=_optional_string(
                 raster.get("depth_mode") if raster is not None else None,
                 "raster depth mode",
@@ -264,6 +620,19 @@ def _optional_number(value: object, label: str) -> float | None:
     if value is None:
         return None
     return _finite_number(value, label)
+
+
+def _pulse_width_ns(value: object, label: str) -> int:
+    width_us = _finite_number(value, label)
+    if width_us < 0:
+        raise RuidaEncodingError(f"{label} cannot be negative")
+    width_ns = Decimal(str(width_us)) * Decimal(1000)
+    integral = width_ns.to_integral_value()
+    if width_ns != integral:
+        raise RuidaEncodingError(
+            f"{label} must convert exactly to an integer number of nanoseconds"
+        )
+    return int(integral)
 
 
 def _integer(value: object, label: str) -> int:
@@ -442,6 +811,8 @@ class _MachineState:
     rapid_rate_mm_min: float | None = None
     air_assist: bool = False
     head_uid: str | None = None
+    frequency_hz: int | None = None
+    pulse_width_ns: int | None = None
 
 
 @dataclass(frozen=True)
@@ -455,21 +826,38 @@ class _LayerKey:
     process_uid: str
     layer_uid: str | None
     raster_axis: Literal["horizontal", "vertical"] | None
+    raster_processing: Literal["native", "planned-path"] | None
+    explicit_channels: bool
 
 
 @dataclass
 class _LayerBuilder:
     key: _LayerKey
     events: list[Any] = field(default_factory=list)
+    raster_sections: list[tuple[int, list[Any]]] = field(default_factory=list)
     raster_axes: set[str] = field(default_factory=set)
     raster_directions: list[int] = field(default_factory=list)
     raster_powers: list[float] = field(default_factory=list)
     process: _ProcessMetadata | None = None
+    inactive_power: tuple[float, float] | None = None
+    frequency_hz: int | None = None
+    pulse_width_ns: int | None = None
+    z_offset_mm: float | None = None
+    uses_dynamic_power: bool = False
 
     def can_merge(self, other: _LayerBuilder) -> bool:
         if self.key != other.key or self.process != other.process:
             return False
+        if (
+            self.inactive_power != other.inactive_power
+            or self.frequency_hz != other.frequency_hz
+            or self.pulse_width_ns != other.pulse_width_ns
+            or self.z_offset_mm != other.z_offset_mm
+        ):
+            return False
         if self.key.kind != "raster":
+            return True
+        if self.key.raster_processing == "planned-path":
             return True
         strategy = self.process.raster_strategy if self.process else None
         directions = {*self.raster_directions, *other.raster_directions}
@@ -477,9 +865,20 @@ class _LayerBuilder:
 
     def merge(self, other: _LayerBuilder) -> None:
         self.events.extend(other.events)
+        for section_id, events in other.raster_sections:
+            if (
+                self.raster_sections
+                and self.raster_sections[-1][0] == section_id
+            ):
+                self.raster_sections[-1][1].extend(events)
+            else:
+                self.raster_sections.append((section_id, list(events)))
         self.raster_axes.update(other.raster_axes)
         self.raster_directions.extend(other.raster_directions)
         self.raster_powers.extend(other.raster_powers)
+        self.uses_dynamic_power = (
+            self.uses_dynamic_power or other.uses_dynamic_power
+        )
 
     def append_raster_direction(
         self,
@@ -493,25 +892,114 @@ class _LayerBuilder:
         delta = end_x - start_x if axis == "horizontal" else end_y - start_y
         self.raster_directions.append(1 if delta > 0 else -1)
 
+    def extend_events(
+        self,
+        events: Iterator[Any] | list[Any] | tuple[Any, ...],
+        section_id: int | None,
+    ) -> None:
+        values = list(events)
+        if not values:
+            return
+        if self.key.raster_processing != "planned-path":
+            self.events.extend(values)
+            return
+        if section_id is None:
+            raise RuidaEncodingError(
+                "Planned-path raster events require an Ops section"
+            )
+        if self.raster_sections and self.raster_sections[-1][0] == section_id:
+            self.raster_sections[-1][1].extend(values)
+        else:
+            self.raster_sections.append((section_id, values))
+
+    def append_event(self, event: Any, section_id: int | None) -> None:
+        self.extend_events((event,), section_id)
+
     def to_layer_plan(self, api: _RuidaApi, index: int) -> Any:
+        minimum, maximum = self._power_range()
+        channels = self._laser_channels(api, minimum, maximum)
+        legacy_minimum = minimum
+        legacy_maximum = maximum
+        laser_index = self.key.laser_index
+        if channels is not None:
+            laser_index = 1
+            legacy_minimum = channels[0].min_power_percent
+            legacy_maximum = channels[0].max_power_percent
         values: dict[str, Any] = {
             "index": index,
             "speed_mm_s": self.key.speed_mm_s,
-            "min_power_percent": self.key.power_percent,
-            "max_power_percent": self.key.power_percent,
+            "min_power_percent": legacy_minimum,
+            "max_power_percent": legacy_maximum,
             "events": tuple(self.events),
             "kind": self.key.kind,
             "air_assist": self.key.air_assist,
             "color_rgb": self.key.color_rgb,
-            "laser_index": self.key.laser_index,
+            "laser_index": laser_index,
+            "laser_channels": channels,
+            "frequency_hz": self.frequency_hz,
+            "pulse_width_ns": self.pulse_width_ns,
+            "z_offset_mm": self.z_offset_mm,
         }
         if self.key.kind == "raster":
-            minimum, maximum = self._raster_power_range()
-            values["min_power_percent"] = minimum
-            values["max_power_percent"] = maximum
-            values["scan_axis"] = self._raster_axis()
-            values["raster_strategy"] = self._raster_strategy()
+            values["raster_processing"] = self.key.raster_processing
+            if self.key.raster_processing == "planned-path":
+                values["raster_sections"] = tuple(
+                    api.RasterSection(tuple(events))
+                    for _section_id, events in self.raster_sections
+                )
+            else:
+                values["scan_axis"] = self._raster_axis()
+                values["raster_strategy"] = self._raster_strategy()
         return api.LayerPlan(**values)
+
+    def _power_range(self) -> tuple[float, float]:
+        if self.key.kind == "raster":
+            return self._raster_power_range()
+        if (
+            self.uses_dynamic_power
+            and self.process is not None
+            and self.process.power_mode == "dynamic"
+        ):
+            minimum = self.process.min_power
+            maximum = self.process.max_power
+            if minimum is None or maximum is None:
+                raise RuidaEncodingError(
+                    "Dynamic vector power requires declared bounds"
+                )
+            return minimum * 100, maximum * 100
+        if self.key.power_percent is None:
+            raise RuidaEncodingError("Vector motion requires layer power")
+        return self.key.power_percent, self.key.power_percent
+
+    def _laser_channels(
+        self,
+        api: _RuidaApi,
+        minimum: float,
+        maximum: float,
+    ) -> tuple[Any, ...] | None:
+        if not self.key.explicit_channels:
+            return None
+        if self.inactive_power is None:
+            inactive = 2 if self.key.laser_index == 1 else 1
+            raise RuidaEncodingError(
+                f"Ruida laser {inactive} inactive stored powers must be "
+                "configured explicitly"
+            )
+        result = []
+        for channel in (1, 2):
+            enabled = channel == self.key.laser_index
+            power_range = (
+                (minimum, maximum) if enabled else self.inactive_power
+            )
+            result.append(
+                api.LaserChannelPlan(
+                    index=channel,
+                    enabled=enabled,
+                    min_power_percent=power_range[0],
+                    max_power_percent=power_range[1],
+                )
+            )
+        return tuple(result)
 
     def _raster_power_range(self) -> tuple[float, float]:
         if self.process is None:
@@ -579,9 +1067,20 @@ class _LayerBuilder:
 class RuidaOpsAdapter:
     """Lower emission-ready planar Ops into a ruida-re JobPlan."""
 
-    def __init__(self, machine: Machine):
-        self.machine = machine
+    def __init__(
+        self,
+        machine: Machine,
+        profile: str = DEFAULT_RUIDA_JOB_PROFILE,
+        *,
+        config: _RuidaEncoderConfig | None = None,
+    ):
         self.api = _load_ruida_api()
+        self.config = config or _snapshot_ruida_encoder_config(
+            machine,
+            profile,
+        )
+        self.profile_name = self.config.profile_name
+        self.profile = self.api.profiles[self.profile_name]
         self.state = _MachineState()
         self.current_pos: tuple[float, float, float] | None = None
         self.pending_travels: list[Any] = []
@@ -593,10 +1092,20 @@ class RuidaOpsAdapter:
         self.section_kind: Literal["vector", "raster"] | None = None
         self.section_type_name: str | None = None
         self.section_raster_mode: str | None = None
+        self.raster_section_id: int | None = None
+        self.next_raster_section_id = 0
         self.resolved_section_raster_axis: (
             Literal["horizontal", "vertical"] | None
         ) = None
         self.warnings: list[str] = []
+        if self.profile_name != DEFAULT_RUIDA_JOB_PROFILE:
+            self.warnings.append(
+                _(
+                    "The selected Ruida research profile has offline "
+                    "fixture evidence only and no hardware execution "
+                    "validation"
+                )
+            )
 
     def build_plan(self, ops: Ops) -> Any:
         for index in range(ops.len()):
@@ -605,11 +1114,54 @@ class RuidaOpsAdapter:
         if not self.builders:
             raise RuidaEncodingError("Ruida jobs must contain marking motion")
         builders = self._coalesced_builders()
+        self._validate_profile_scope(builders)
         layers = tuple(
             builder.to_layer_plan(self.api, index)
             for index, builder in enumerate(builders)
         )
         return self.api.JobPlan(layers=layers)
+
+    def _validate_profile_scope(
+        self,
+        builders: list[_LayerBuilder],
+    ) -> None:
+        if self.profile_name == "proven":
+            return
+        if self.profile_name == "planned-path-research":
+            if (
+                len(builders) != 1
+                or builders[0].key.kind != "raster"
+                or builders[0].key.raster_processing != "planned-path"
+            ):
+                raise RuidaEncodingError(
+                    "The planned-path-research profile requires exactly "
+                    "one planned-path raster layer"
+                )
+            return
+        if self.profile_name == "z-research":
+            if (
+                len(builders) != 1
+                or builders[0].key.kind != "raster"
+                or builders[0].key.raster_processing != "native"
+                or builders[0].z_offset_mm is None
+            ):
+                raise RuidaEncodingError(
+                    "The z-research profile requires exactly one native "
+                    "raster layer with a typed logical Z offset"
+                )
+            return
+        if len(builders) != 1 or builders[0].key.kind != "vector":
+            raise RuidaEncodingError(
+                f"Ruida job profile {self.profile_name!r} requires exactly "
+                "one vector layer"
+            )
+        if (
+            self.profile_name == "dynamic-power-research"
+            and builders[0].key.laser_index != 1
+        ):
+            raise RuidaEncodingError(
+                "Dynamic Ruida vector power has evidence for laser head 1 only"
+            )
 
     def _coalesced_builders(self) -> list[_LayerBuilder]:
         result: list[_LayerBuilder] = []
@@ -661,6 +1213,28 @@ class RuidaOpsAdapter:
             self.state.head_uid = ops.head_uid(index)
             self._record_process_state("head")
             return True
+        if command == CommandType.SET_FREQUENCY:
+            if self.active_process is None:
+                raise RuidaEncodingError(
+                    "SET_FREQUENCY requires active process metadata"
+                )
+            frequency = _integer(ops.frequency(index), "laser frequency")
+            if frequency <= 0:
+                raise RuidaEncodingError("laser frequency must be positive")
+            self.state.frequency_hz = frequency
+            self._record_process_state("frequency")
+            return True
+        if command == CommandType.SET_PULSE_WIDTH:
+            if self.active_process is None:
+                raise RuidaEncodingError(
+                    "SET_PULSE_WIDTH requires active process metadata"
+                )
+            self.state.pulse_width_ns = _pulse_width_ns(
+                ops.pulse_width(index),
+                "laser pulse width",
+            )
+            self._record_process_state("pulse_width")
+            return True
         return False
 
     def _handle_motion_command(
@@ -677,6 +1251,9 @@ class RuidaOpsAdapter:
             return True
         if command == CommandType.SCAN_LINE:
             self._handle_scan(ops, index)
+            return True
+        if command == CommandType.DWELL:
+            self._handle_dwell(ops, index)
             return True
         if command in (
             CommandType.ARC_TO,
@@ -727,14 +1304,6 @@ class RuidaOpsAdapter:
     @staticmethod
     def _reject_command(command: CommandType) -> None:
         if command in (
-            CommandType.SET_FREQUENCY,
-            CommandType.SET_PULSE_WIDTH,
-            CommandType.DWELL,
-        ):
-            raise RuidaEncodingError(
-                f"Ruida job compiler does not support {command.name}"
-            )
-        if command in (
             CommandType.SET_COOLANT,
             CommandType.SET_HEAD_COOLANT,
             CommandType.SET_SPINDLE_RPM,
@@ -758,6 +1327,31 @@ class RuidaOpsAdapter:
         self.pending_travels.append(self.api.TravelTo(end[0], end[1]))
         self.current_pos = end
 
+    def _handle_dwell(self, ops: Ops, index: int) -> None:
+        self._require_position()
+        process = self._require_process()
+        if process.kind != "vector" or self._motion_kind("vector") != "vector":
+            raise RuidaEncodingError(
+                "Ruida DWELL has controlled evidence only for vector motion"
+            )
+        if self.profile_name != "stationary-research":
+            raise RuidaEncodingError(
+                "Ruida DWELL requires the stationary-research job profile"
+            )
+        duration = _finite_number(
+            ops.dwell_duration(index),
+            "dwell duration",
+        )
+        if duration <= 0:
+            raise RuidaEncodingError("dwell duration must be positive")
+        if duration > 200:
+            raise RuidaEncodingError(
+                "Ruida stationary dwell cannot exceed 200 ms"
+            )
+        builder = self._builder_for("vector")
+        self._attach_pending_travels(builder, self.current_pos)
+        builder.append_event(self.api.Dwell(duration), None)
+
     def _handle_line(self, ops: Ops, index: int) -> None:
         start = self._require_position()
         end = self._planar_endpoint(ops, index)
@@ -780,20 +1374,59 @@ class RuidaOpsAdapter:
             self.pending_travels.append(self.api.TravelTo(end[0], end[1]))
             self.current_pos = end
             return
-        raster_axis = (
-            self._resolve_raster_axis(start, end) if kind == "raster" else None
-        )
+        if (
+            kind == "vector"
+            and process.power_mode == "dynamic"
+            and self.state.power == 0
+        ):
+            self.pending_travels.append(self.api.TravelTo(end[0], end[1]))
+            self.current_pos = end
+            return
+        raster_processing = None
+        raster_axis = None
+        if kind == "raster":
+            raster_processing, raster_axis = self._raster_layout(
+                start,
+                end,
+                raster_mode,
+            )
         if kind == "raster" and process.kind != "mixed":
             self._validate_static_raster_line(process)
         builder = self._builder_for(
             kind,
             raster_axis,
+            raster_processing=raster_processing,
             static_raster=kind == "raster",
         )
         self._attach_pending_travels(builder, start)
-        if kind == "raster":
+        if kind == "raster" and raster_processing == "native":
             builder.append_raster_direction(start, end)
-        builder.events.append(self.api.MarkTo(end[0], end[1]))
+        dynamic_power = (
+            kind == "vector"
+            and process.power_mode == "dynamic"
+            and process.power is not None
+            and not math.isclose(
+                self.state.power,
+                process.power,
+                rel_tol=0,
+                abs_tol=1e-9,
+            )
+        )
+        if dynamic_power:
+            if self.profile_name != "dynamic-power-research":
+                raise RuidaEncodingError(
+                    "Reduced positive vector power requires the "
+                    "dynamic-power-research job profile"
+                )
+            builder.uses_dynamic_power = True
+            event = self.api.MarkWithPower(
+                end[0],
+                end[1],
+                self._event_laser_channels(builder),
+            )
+        else:
+            event = self.api.MarkTo(end[0], end[1])
+        builder.append_event(event, self._planned_section_id(builder))
         self.current_pos = end
 
     def _handle_scan(self, ops: Ops, index: int) -> None:
@@ -811,14 +1444,26 @@ class RuidaOpsAdapter:
         if _same_wire_position(start, end):
             self.current_pos = end
             return
-        raster_axis = self._resolve_raster_axis(start, end)
+        raster_mode = self.section_raster_mode or process.raster_mode
+        raster_processing, raster_axis = self._raster_layout(
+            start,
+            end,
+            raster_mode,
+        )
+        if raster_processing == "planned-path":
+            self._validate_planned_scan_samples(process, samples)
         if not any(samples):
             self.pending_travels.append(self.api.TravelTo(end[0], end[1]))
             self.current_pos = end
             return
-        builder = self._builder_for("raster", raster_axis)
+        builder = self._builder_for(
+            "raster",
+            raster_axis,
+            raster_processing=raster_processing,
+        )
         self._attach_pending_travels(builder, start)
-        builder.append_raster_direction(start, end)
+        if raster_processing == "native":
+            builder.append_raster_direction(start, end)
         dx = end[0] - start[0]
         dy = end[1] - start[1]
         for run_end, sample in _sample_runs(samples):
@@ -827,12 +1472,69 @@ class RuidaOpsAdapter:
             y = start[1] + dy * fraction
             percent = sample * 100 / 255
             if sample:
-                builder.events.append(self.api.SetModulation(percent))
-                builder.events.append(self.api.MarkTo(x, y))
+                if raster_processing == "native":
+                    builder.append_event(
+                        self.api.SetModulation(percent),
+                        None,
+                    )
+                builder.append_event(
+                    self.api.MarkTo(x, y),
+                    self._planned_section_id(builder),
+                )
                 builder.raster_powers.append(percent)
             else:
-                builder.events.append(self.api.TravelTo(x, y))
+                builder.append_event(
+                    self.api.TravelTo(x, y),
+                    self._planned_section_id(builder),
+                )
         self.current_pos = end
+
+    def _raster_layout(
+        self,
+        start: tuple[float, float, float],
+        end: tuple[float, float, float],
+        raster_mode: str | None,
+    ) -> tuple[
+        Literal["native", "planned-path"],
+        Literal["horizontal", "vertical"] | None,
+    ]:
+        process = self._require_process()
+        try:
+            _raster_axis(start, end)
+        except RuidaEncodingError as error:
+            if raster_mode != "CONSTANT_POWER":
+                raise RuidaEncodingError(
+                    "Diagonal variable/grayscale or depth raster is not "
+                    "supported by the evidenced Ruida profile"
+                ) from error
+            return "planned-path", None
+        if process.raster_cross_hatch and raster_mode == "CONSTANT_POWER":
+            return "planned-path", None
+        return "native", self._resolve_raster_axis(start, end)
+
+    def _validate_planned_scan_samples(
+        self,
+        process: _ProcessMetadata,
+        samples: bytes,
+    ) -> None:
+        if process.power_mode != "static" or process.power is None:
+            raise RuidaEncodingError(
+                "Planned-path raster supports constant binary power only"
+            )
+        expected = process.power
+        for sample in samples:
+            if sample == 0:
+                continue
+            if not math.isclose(
+                sample / 255,
+                expected,
+                rel_tol=0,
+                abs_tol=_U8_POWER_TOLERANCE,
+            ):
+                raise RuidaEncodingError(
+                    "Diagonal variable/grayscale raster modulation is not "
+                    "supported by the evidenced Ruida profile"
+                )
 
     def _resolve_raster_axis(
         self,
@@ -941,6 +1643,7 @@ class RuidaOpsAdapter:
         kind: Literal["vector", "raster"],
         raster_axis: Literal["horizontal", "vertical"] | None = None,
         *,
+        raster_processing: Literal["native", "planned-path"] | None = None,
         static_raster: bool = False,
     ) -> _LayerBuilder:
         process = self._require_process()
@@ -949,15 +1652,42 @@ class RuidaOpsAdapter:
         if (
             kind == "vector"
             and process.kind != "mixed"
-            and process.power_mode != "static"
+            and process.power_mode not in ("static", "dynamic")
         ):
             raise RuidaEncodingError(
-                "Vector Ruida layers require static process power"
+                "Vector Ruida layers require explicit process power"
             )
-        if (kind == "raster") != (raster_axis is not None):
+        if (
+            kind == "vector"
+            and process.power_mode == "dynamic"
+            and "power" not in self.process_state_fields
+        ):
             raise RuidaEncodingError(
-                "Raster layers require exactly one scan axis"
+                "Dynamic vector power requires explicit Ops power state"
             )
+        if kind == "raster" and raster_processing not in (
+            "native",
+            "planned-path",
+        ):
+            raise RuidaEncodingError(
+                "Raster layers require an explicit processing mode"
+            )
+        if raster_processing == "native" and raster_axis is None:
+            raise RuidaEncodingError("Native raster requires a scan axis")
+        if raster_processing == "planned-path" and raster_axis is not None:
+            raise RuidaEncodingError(
+                "Planned-path raster cannot declare a native scan axis"
+            )
+        if (
+            raster_processing == "planned-path"
+            and self.profile_name != "planned-path-research"
+        ):
+            raise RuidaEncodingError(
+                "Planned-path raster requires the "
+                "planned-path-research job profile"
+            )
+        laser_index = self._laser_index(process)
+        explicit_channels = self._requires_explicit_channels(laser_index)
         key = _LayerKey(
             kind=kind,
             speed_mm_s=speed / 60,
@@ -965,18 +1695,102 @@ class RuidaOpsAdapter:
                 power * 100 if kind == "vector" or static_raster else None
             ),
             air_assist=air_assist,
-            laser_index=self._laser_index(process),
+            laser_index=laser_index,
             color_rgb=process.color_rgb,
             process_uid=process.uid,
             layer_uid=self.active_layer_uid,
             raster_axis=raster_axis,
+            raster_processing=(
+                raster_processing if kind == "raster" else None
+            ),
+            explicit_channels=explicit_channels,
         )
         if self.active_builder is not None and self.active_builder.key == key:
             return self.active_builder
-        builder = _LayerBuilder(key=key, process=process)
+        builder = _LayerBuilder(
+            key=key,
+            process=process,
+            inactive_power=self._inactive_power(
+                laser_index,
+                explicit_channels,
+            ),
+            frequency_hz=process.frequency_hz,
+            pulse_width_ns=self._process_pulse_width_ns(process),
+            z_offset_mm=process.z_offset_mm,
+        )
         self.builders.append(builder)
         self.active_builder = builder
         return builder
+
+    def _requires_explicit_channels(self, laser_index: int) -> bool:
+        return laser_index == 2 or self.profile.laser_channel_mode is not None
+
+    def _process_pulse_width_ns(
+        self,
+        process: _ProcessMetadata,
+    ) -> int | None:
+        if process.pulse_width_us is not None:
+            return _pulse_width_ns(process.pulse_width_us, "pulse width")
+        if self.profile_name == "fiber-research":
+            return 0
+        return None
+
+    def _inactive_power(
+        self,
+        laser_index: int,
+        required: bool,
+    ) -> tuple[float, float] | None:
+        if not required:
+            return None
+        inactive_index = 2 if laser_index == 1 else 1
+        if not self.config.inactive_power_confirmed(inactive_index):
+            raise RuidaEncodingError(
+                f"Inactive laser {inactive_index} channel powers must be "
+                "explicitly confirmed"
+            )
+        minimum, maximum = self.config.inactive_power(inactive_index)
+        if minimum is None or maximum is None:
+            raise RuidaEncodingError(
+                f"Ruida laser {inactive_index} inactive stored powers must "
+                "be configured explicitly"
+            )
+        return minimum, maximum
+
+    def _event_laser_channels(
+        self,
+        builder: _LayerBuilder,
+    ) -> tuple[Any, ...]:
+        if not builder.key.explicit_channels:
+            raise RuidaEncodingError(
+                "Dynamic vector power requires explicit laser channels"
+            )
+        inactive = builder.inactive_power
+        if inactive is None:
+            raise RuidaEncodingError(
+                "Dynamic vector inactive channel powers are not configured"
+            )
+        process = builder.process
+        if process is None or process.min_power is None:
+            raise RuidaEncodingError(
+                "Dynamic vector layer minimum power is not declared"
+            )
+        effective_minimum = process.min_power * 100
+        effective_maximum = self.state.power * 100
+        channels = []
+        for index in (1, 2):
+            enabled = index == builder.key.laser_index
+            minimum, maximum = (
+                (effective_minimum, effective_maximum) if enabled else inactive
+            )
+            channels.append(
+                self.api.LaserChannelPlan(
+                    index=index,
+                    enabled=enabled,
+                    min_power_percent=minimum,
+                    max_power_percent=maximum,
+                )
+            )
+        return tuple(channels)
 
     def _regime(
         self,
@@ -1063,20 +1877,29 @@ class RuidaOpsAdapter:
             )
         head = next(
             (
-                candidate
-                for candidate in self.machine.heads
-                if candidate.uid == process.head_uid
+                mapping
+                for mapping in self.config.head_mappings
+                if mapping[0] == process.head_uid
             ),
             None,
         )
-        if head is None or head.tool_number != process.head_tool_number:
+        if head is None or head[1] != process.head_tool_number:
             raise RuidaEncodingError(
                 "Process head metadata disagrees with the machine"
             )
-        laser_index = process.head_tool_number + 1
-        if laser_index != 1:
+        if self.profile_name == "fiber-research" and head[2] != "fiber":
             raise RuidaEncodingError(
-                "The proven Ruida profile supports laser index 1 only"
+                "The fiber-research profile requires a fiber laser head"
+            )
+        laser_index = process.head_tool_number + 1
+        if laser_index not in (1, 2):
+            raise RuidaEncodingError(
+                "Ruida job profiles support selected laser heads 1 or 2 only"
+            )
+        if laser_index == 2 and self.profile_name != "dual-laser-research":
+            raise RuidaEncodingError(
+                f"Ruida job profile {self.profile_name!r} does not support "
+                "explicit laser head 2"
             )
         return laser_index
 
@@ -1094,7 +1917,6 @@ class RuidaOpsAdapter:
     def _validate_process_state(self, process: _ProcessMetadata) -> None:
         if process.kind != "mixed":
             checks = (
-                ("power", self.state.power, process.power, "power"),
                 (
                     "feed",
                     self.state.feed_rate_mm_min,
@@ -1125,6 +1947,40 @@ class RuidaOpsAdapter:
                 raise RuidaEncodingError(
                     f"Process metadata and Ops {label} disagree"
                 )
+            if "power" in self.process_state_fields:
+                expected = process.power
+                if expected is None:
+                    raise RuidaEncodingError(
+                        "Process metadata and Ops power disagree"
+                    )
+                if process.power_mode == "dynamic":
+                    minimum = process.min_power
+                    maximum = (
+                        process.max_power
+                        if process.kind == "vector"
+                        else expected
+                    )
+                    if (
+                        minimum is None
+                        or maximum is None
+                        or not (
+                            minimum - 1e-9
+                            <= self.state.power
+                            <= maximum + 1e-9
+                        )
+                    ):
+                        raise RuidaEncodingError(
+                            "Process metadata and Ops power disagree"
+                        )
+                elif not math.isclose(
+                    self.state.power,
+                    expected,
+                    rel_tol=0,
+                    abs_tol=1e-9,
+                ):
+                    raise RuidaEncodingError(
+                        "Process metadata and Ops power disagree"
+                    )
             if (
                 "air" in self.process_state_fields
                 and self.state.air_assist != process.air_assist
@@ -1139,6 +1995,27 @@ class RuidaOpsAdapter:
             raise RuidaEncodingError(
                 "Process metadata and Ops head UID disagree"
             )
+        state_checks = (
+            (
+                "frequency",
+                self.state.frequency_hz,
+                process.frequency_hz,
+                "frequency",
+            ),
+            (
+                "pulse_width",
+                self.state.pulse_width_ns,
+                self._process_pulse_width_ns(process),
+                "pulse width",
+            ),
+        )
+        for field_name, actual, expected, label in state_checks:
+            if field_name not in self.process_state_fields:
+                continue
+            if actual != expected:
+                raise RuidaEncodingError(
+                    f"Process metadata and Ops {label} disagree"
+                )
 
     def _attach_pending_travels(
         self,
@@ -1149,10 +2026,31 @@ class RuidaOpsAdapter:
         if target is None:
             return
         if self.pending_travels:
-            target.events.extend(self.pending_travels)
+            target.extend_events(
+                self.pending_travels,
+                self._planned_section_id(target),
+            )
             self.pending_travels.clear()
-        elif not target.events and start is not None:
-            target.events.append(self.api.TravelTo(start[0], start[1]))
+        elif (
+            not target.events
+            and not target.raster_sections
+            and start is not None
+        ):
+            target.append_event(
+                self.api.TravelTo(start[0], start[1]),
+                self._planned_section_id(target),
+            )
+
+    def _planned_section_id(
+        self,
+        builder: _LayerBuilder,
+    ) -> int | None:
+        if builder.key.raster_processing != "planned-path":
+            return None
+        if self.raster_section_id is None:
+            self.raster_section_id = self.next_raster_section_id
+            self.next_raster_section_id += 1
+        return self.raster_section_id
 
     def _start_layer(self, uid: str) -> None:
         self._attach_pending_travels()
@@ -1169,7 +2067,6 @@ class RuidaOpsAdapter:
         self.active_builder = None
 
     def _start_section(self, ops: Ops, index: int) -> None:
-        self._attach_pending_travels()
         if self.section_kind is not None:
             raise RuidaEncodingError("Nested Ops sections are invalid")
         section_type, _workpiece_uid, raster_mode = ops.section_params(index)
@@ -1183,11 +2080,15 @@ class RuidaOpsAdapter:
         if kind == "raster":
             self.active_builder = None
             self.resolved_section_raster_axis = None
-        elif (
-            self.active_builder is not None
-            and self.active_builder.key.kind != kind
-        ):
-            self.active_builder = None
+            self.raster_section_id = self.next_raster_section_id
+            self.next_raster_section_id += 1
+        else:
+            self._attach_pending_travels()
+            if (
+                self.active_builder is not None
+                and self.active_builder.key.kind != kind
+            ):
+                self.active_builder = None
         self.section_kind = kind
         self.section_type_name = section_type.name
         self.section_raster_mode = raster_mode_name
@@ -1210,6 +2111,7 @@ class RuidaOpsAdapter:
         if kind == "raster":
             self.active_builder = None
             self.resolved_section_raster_axis = None
+            self.raster_section_id = None
         self.section_kind = None
         self.section_type_name = None
         self.section_raster_mode = None
@@ -1259,6 +2161,7 @@ class RuidaOpsAdapter:
         self._validate_process(process)
         self.active_process = process
         self.resolved_section_raster_axis = None
+        self.raster_section_id = None
         self.process_state_fields.clear()
         self.active_builder = None
 
@@ -1269,16 +2172,17 @@ class RuidaOpsAdapter:
             raise RuidaEncodingError(
                 "Process end does not match process start"
             )
+        self._validate_process_state(self.active_process)
         self.active_process = None
         self.resolved_section_raster_axis = None
+        self.raster_section_id = None
         self.process_state_fields.clear()
         self.active_builder = None
 
-    @staticmethod
-    def _validate_process(process: _ProcessMetadata) -> None:
+    def _validate_process(self, process: _ProcessMetadata) -> None:
         RuidaOpsAdapter._validate_process_motion(process)
         RuidaOpsAdapter._validate_process_power(process)
-        RuidaOpsAdapter._validate_process_features(process)
+        self._validate_process_features(process)
         if process.kind == "raster":
             RuidaOpsAdapter._validate_raster_metadata(process)
         RuidaOpsAdapter._validate_raster_angle(process)
@@ -1359,16 +2263,55 @@ class RuidaOpsAdapter:
                     "Dynamic process power requires min <= max <= value"
                 )
 
-    @staticmethod
-    def _validate_process_features(process: _ProcessMetadata) -> None:
-        if process.frequency_hz:
-            raise RuidaEncodingError(
-                "Ruida job compiler does not support pulse frequency"
+    def _validate_process_features(self, process: _ProcessMetadata) -> None:
+        if process.frequency_hz is not None:
+            if process.kind != "vector":
+                raise RuidaEncodingError(
+                    "Ruida layer frequency has evidence for vector layers only"
+                )
+            if self.profile_name != "rf-research":
+                raise RuidaEncodingError(
+                    "Ruida layer frequency requires the rf-research "
+                    "job profile"
+                )
+            if not 10_000 <= process.frequency_hz <= 20_000:
+                raise RuidaEncodingError(
+                    "Ruida RF frequency must be between 10000 and 20000 Hz"
+                )
+        if process.pulse_width_us is not None:
+            if process.kind != "vector":
+                raise RuidaEncodingError(
+                    "Ruida fiber pulse width has evidence for vector "
+                    "layers only"
+                )
+            if self.profile_name != "fiber-research":
+                raise RuidaEncodingError(
+                    "Ruida fiber pulse width requires the fiber-research "
+                    "job profile"
+                )
+            pulse_width_ns = _pulse_width_ns(
+                process.pulse_width_us,
+                "pulse width",
             )
-        if process.pulse_width_us:
-            raise RuidaEncodingError(
-                "Ruida job compiler does not support pulse width"
-            )
+            if not 0 <= pulse_width_ns <= 200:
+                raise RuidaEncodingError(
+                    "Ruida fiber pulse width must be between 0 and 200 ns"
+                )
+        if process.z_offset_mm is not None:
+            if self.profile_name != "z-research":
+                raise RuidaEncodingError(
+                    "Logical layer Z offset requires the z-research "
+                    "job profile"
+                )
+            if process.kind != "raster":
+                raise RuidaEncodingError(
+                    "Logical layer Z offset has evidence for raster "
+                    "layers only"
+                )
+            if not 0 < abs(process.z_offset_mm) <= 1:
+                raise RuidaEncodingError(
+                    "Logical layer Z offset must be nonzero and within 1 mm"
+                )
         if process.rotary:
             raise RuidaEncodingError(
                 "Ruida job compiler does not support rotary motion"
@@ -1379,7 +2322,8 @@ class RuidaOpsAdapter:
             )
         if process.z_motion:
             raise RuidaEncodingError(
-                "Ruida job compiler does not support Z motion intent"
+                "Rayforge has no typed Ruida layer Z-offset contract; "
+                "generic Z motion intent remains unsupported"
             )
 
     @staticmethod
@@ -1487,6 +2431,40 @@ class RuidaOpsAdapter:
 class RuidaEncoder(OpsEncoder):
     """Compile planar Rayforge Ops through ruida-re's public job API."""
 
+    def __init__(
+        self,
+        profile: str = DEFAULT_RUIDA_JOB_PROFILE,
+        *,
+        config: _RuidaEncoderConfig | None = None,
+    ) -> None:
+        profile_name = normalize_ruida_job_profile(profile)
+        if config is not None and config.profile_name != profile_name:
+            raise RuidaEncodingError(
+                "Ruida encoder profile disagrees with its config snapshot"
+            )
+        self.profile_name = profile_name
+        self._config = config
+
+    @classmethod
+    def from_machine(cls, machine: Machine) -> RuidaEncoder:
+        config = _snapshot_ruida_encoder_config(machine)
+        return cls(config.profile_name, config=config)
+
+    @classmethod
+    def context_from_machine(
+        cls,
+        machine: Machine,
+    ) -> tuple[RuidaEncoder, dict[str, Any]]:
+        config = _snapshot_ruida_encoder_config(machine)
+        return (
+            cls(config.profile_name, config=config),
+            config.token_payload(),
+        )
+
+    @staticmethod
+    def token_payload(machine: Machine) -> dict[str, Any]:
+        return ruida_encoder_token_payload(machine)
+
     def encode(
         self,
         ops: Ops,
@@ -1502,9 +2480,19 @@ class RuidaEncoder(OpsEncoder):
                 payload=b"",
             )
 
-        adapter = RuidaOpsAdapter(machine)
+        config = self._config or _snapshot_ruida_encoder_config(
+            machine,
+            self.profile_name,
+        )
+        adapter = RuidaOpsAdapter(
+            machine,
+            self.profile_name,
+            config=config,
+        )
         plan = adapter.build_plan(ops)
-        result = adapter.api.RuidaJobCompiler().compile(plan)
+        result = adapter.api.RuidaJobCompiler(
+            profile=adapter.profile,
+        ).compile(plan)
         payload = result.encode_rd()
         text, op_map = self._display(ops, result)
         bounds = result.bounds

@@ -142,6 +142,7 @@ class IntentController:
         self.progress_changed = Signal()
         self.rebuild_started = Signal()
         self.rebuild_finished = Signal()
+        self.generation_invalidated = Signal()
         self.data_stale = Signal()
         self.pipeline_error = Signal()
         self.pipeline_warnings = Signal()
@@ -231,6 +232,7 @@ class IntentController:
 
     def _on_doc_changed(self, *args: Any, **kwargs: Any) -> None:
         """Trigger a debounced intent rebuild on any doc change."""
+        self._invalidate_generation()
         if self._pause_count > 0 or not self._auto_rebuild:
             if not self._data_stale_flag:
                 self._data_stale_flag = True
@@ -268,6 +270,7 @@ class IntentController:
         in-flight run is signalled to cancel so the next generation
         starts as soon as possible.
         """
+        self._invalidate_generation()
         if self._rebuild_timer is not None:
             self._rebuild_timer.cancel()
             self._rebuild_timer = None
@@ -277,6 +280,25 @@ class IntentController:
                 self._intent.cancel()
             return
         self._rebuild()
+
+    def invalidate_and_schedule_rebuild(self) -> None:
+        """Invalidate current work and request a debounced rebuild."""
+        self._invalidate_generation()
+        if self._pause_count > 0 or not self._auto_rebuild:
+            if not self._data_stale_flag:
+                self._data_stale_flag = True
+                self.data_stale.send(self)
+            return
+        self._schedule_rebuild()
+
+    def _invalidate_generation(self) -> None:
+        self._generation_id += 1
+        if self._intent is not None:
+            self._intent.cancel()
+        self.generation_invalidated.send(
+            self,
+            generation_id=self._generation_id,
+        )
 
     def _schedule_rebuild(self) -> None:
         if self._rebuild_timer is not None:
@@ -359,8 +381,11 @@ class IntentController:
         self,
         error_kind: ErrorKind,
         message: str,
+        generation_id: int | None = None,
     ) -> None:
         """Emit ``pipeline_error`` on the main thread."""
+        if generation_id is not None and generation_id != self._generation_id:
+            return
         self.pipeline_error.send(
             self,
             error_kind=error_kind,
@@ -371,16 +396,28 @@ class IntentController:
         self,
         task_status: str,
         message: str,
+        generation_id: int | None = None,
     ) -> None:
+        if generation_id is None:
+            generation_id = self._generation_id
+        if generation_id != self._generation_id:
+            return
         self.job_generation_finished.send(
             self,
             handle=None,
             task_status=task_status,
             error=message,
+            generation_id=generation_id,
         )
 
-    def _emit_pipeline_warnings(self, warnings: list) -> None:
+    def _emit_pipeline_warnings(
+        self,
+        warnings: list,
+        generation_id: int | None = None,
+    ) -> None:
         """Emit ``pipeline_warnings`` on the main thread."""
+        if generation_id is not None and generation_id != self._generation_id:
+            return
         self.pipeline_warnings.send(self, warnings=warnings)
 
     # ------------------------------------------------------------------
@@ -399,9 +436,9 @@ class IntentController:
         shared task manager.
         """
         gen = node.generation_id
-        if gen < self._generation_id:
+        if gen != self._generation_id:
             logger.debug(
-                "Discarding superseded result for %s (gen %s < %s)",
+                "Discarding superseded result for %s (gen %s != %s)",
                 node.key,
                 gen,
                 self._generation_id,
@@ -416,6 +453,7 @@ class IntentController:
                         self._emit_job_generation_terminal,
                         "cancelled",
                         "Job generation was cancelled.",
+                        gen,
                     )
                 return
             if kind == ErrorKind.UPSTREAM_FAILED:
@@ -426,6 +464,7 @@ class IntentController:
                         "failed",
                         "Job encoding failed because an upstream pipeline "
                         "stage failed.",
+                        gen,
                     )
                 return
             logger.error("Node %s failed: %s", node.key, node.error)
@@ -433,12 +472,14 @@ class IntentController:
                 self._emit_pipeline_error,
                 kind,
                 node.error,
+                gen,
             )
             if node.key == JOB_ENCODE_KEY:
                 self._task_manager.schedule_on_main_thread(
                     self._emit_job_generation_terminal,
                     "failed",
                     node.error,
+                    gen,
                 )
             return
         key = node.key
@@ -453,10 +494,10 @@ class IntentController:
         warnings = getattr(output, "warnings", None) or []
         if warnings:
             self._task_manager.schedule_on_main_thread(
-                self._emit_pipeline_warnings, warnings
+                self._emit_pipeline_warnings, warnings, gen
             )
         self._task_manager.schedule_on_main_thread(
-            self._reattach, key, item, output
+            self._reattach, key, item, output, gen
         )
 
     def _on_batch_progress(self, fraction: float, message: str) -> None:
@@ -476,7 +517,13 @@ class IntentController:
         """Emit :attr:`progress_changed` on the main thread."""
         self.progress_changed.send(self, fraction=fraction, message=message)
 
-    def _reattach(self, key: str, item: DocItem, output: Any) -> None:
+    def _reattach(
+        self,
+        key: str,
+        item: DocItem,
+        output: Any,
+        generation_id: int | None = None,
+    ) -> None:
         """
         Reattach a completed node's output onto the owning DocItem and
         emit the corresponding signal so the UI can update.
@@ -491,7 +538,17 @@ class IntentController:
         * ``job:encode`` → :attr:`job_generation_finished` (and
           :attr:`job_time_updated` when a time estimate is available)
         """
-        gen = self._generation_id
+        if generation_id is None:
+            generation_id = self._generation_id
+        if generation_id != self._generation_id:
+            logger.debug(
+                "Discarding superseded reattachment for %s (gen %s != %s)",
+                key,
+                generation_id,
+                self._generation_id,
+            )
+            return
+        gen = generation_id
         if key.startswith("workpiece:"):
             parsed = parse_workpiece_key(key)
             if parsed is None:
@@ -524,7 +581,10 @@ class IntentController:
             self.job_time_updated.send(self, total_seconds=time_estimate)
         elif key == "job:encode":
             self.job_generation_finished.send(
-                self, handle=output, task_status="completed"
+                self,
+                handle=output,
+                task_status="completed",
+                generation_id=gen,
             )
 
     # ------------------------------------------------------------------

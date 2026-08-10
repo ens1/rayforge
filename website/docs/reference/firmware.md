@@ -487,6 +487,17 @@ compiler is provided by
 [ruida-re](https://github.com/ens1/ruida-re), whose current execution evidence
 profile is based on LightBurn 2.1.03 output for a Ruida 644XS controller.
 
+:::warning
+The advanced profiles described below have offline producer-fixture evidence
+only. They have not been validated by hardware execution. Keep the `proven`
+profile selected unless you are intentionally evaluating one narrow research
+capability.
+:::
+
+Before a Rayforge release can depend on this integration, `ruida-re` 0.1.0
+must be published. The Git revision used by development builds does not satisfy
+Rayforge's public `ruida-re==0.1.0` package dependency.
+
 #### Program generation boundary
 
 Rayforge remains responsible for image processing, path planning, overscan,
@@ -497,16 +508,17 @@ stream into a `ruida-re` `JobPlan`; `ruida-re` then compiles the plan into a
 complete, checksummed `.rd` program.
 
 Raster axis and angle metadata retain the source-space planning intent after
-workpiece transforms. The Ruida backend derives the effective horizontal or
-vertical axis from micrometer-quantized machine-space scanlines. Rotations and
-reflections are therefore preserved, while diagonal or inconsistent final
-scan motion still fails before program generation.
+workpiece transforms. For the proven profile, the Ruida backend derives the
+effective horizontal or vertical axis from micrometer-quantized machine-space
+scanlines. Rotations and reflections are therefore preserved. Constant-power
+diagonal and cross-hatch motion uses a separate planned-path research profile;
+the default profile continues to reject it.
 
 This boundary keeps Ruida protocol details out of Rayforge's geometry and
 image pipeline while allowing another laser application to integrate the same
 `ruida-re` planning and protocol library.
 
-#### Evidence-backed program features
+#### Proven default profile
 
 - Flat XY vector cutting and engraving
 - Mixed vector and raster layers
@@ -516,11 +528,38 @@ image pipeline while allowing another laser application to integrate the same
 - Grayscale power modulation
 - One laser head and explicit air-assist state
 
-The encoder fails closed when a job requests a feature outside the evidenced
-profile. Unsupported features currently include Z motion, rotary axes,
-machine-space diagonal raster scans, frequency or pulse-width control, and
-multiple laser heads. These are rejected before any transfer rather than
-approximated with controller-specific guesses.
+This conservative `proven` profile is selected by default and is the only
+profile with hardware execution evidence. It rejects all advanced capabilities
+below.
+
+#### Offline research profiles
+
+Each profile must be selected explicitly in the Ruida driver settings. Every
+research profile emits an encoder warning, accepts exactly one evidenced
+layer, and fails closed before controller I/O when the job exceeds its scope.
+The profiles cannot be combined.
+
+| Profile | Narrow accepted scope |
+| :------ | :-------------------- |
+| `planned-path-research` | One planned-path raster layer using constant binary power for diagonal or cross-hatch scans. Variable-power, grayscale, and depth-map diagonal scans remain unsupported. |
+| `dual-laser-research` | One vector layer using either controller channel 1 or channel 2. The inactive channel's stored powers must be entered and explicitly confirmed. Simultaneous channel mask 3 is not supported. |
+| `stationary-research` | One vector layer containing Dwell events greater than 0 and no longer than 200 ms. Rayforge currently produces these only through manual Ops or frame corner pauses. This is not stationary marking Pulse. |
+| `rf-research` | One vector layer with RF frequency from 10,000 through 20,000 Hz. |
+| `fiber-research` | One vector layer on a fiber head with pulse width from 0 through 0.2 µs, encoded as 0 through 200 ns. |
+| `z-research` | One native raster layer with a nonzero typed logical layer Z offset no greater than 1 mm in either direction. The compiler emits a balanced relative envelope and still requires all motion endpoints at Z=0. |
+| `dynamic-power-research` | One head-1 vector layer whose tab transform produces reduced positive marking power. It does not provide general speed-dependent or raster dynamic power. |
+
+The following remain unsupported for every profile:
+
+- Rotary motion and rotary attachments
+- Cut-through start/end controls
+- Generic endpoint Z motion, Z-per-pass, and arbitrary 2.5D motion
+- Stationary marking Pulse
+- Simultaneous firing of both Ruida laser channels
+- Combining research capabilities, or using them in multi-layer jobs
+
+These requests are rejected instead of being approximated with
+controller-specific guesses.
 
 #### Transfer behavior
 
@@ -531,6 +570,9 @@ approximated with controller-specific guesses.
 - A successful transfer confirms that the program bytes were delivered under
   the transport's protocol contract. It does **not** confirm that physical
   execution has completed.
+- After a completed or ambiguous transfer, Rayforge treats controller
+  execution as unconfirmed and refuses another transfer. Reconnect only after
+  the controller is visibly idle.
 
 :::warning
 The transfer-only drivers do not implement Ruida device management, position

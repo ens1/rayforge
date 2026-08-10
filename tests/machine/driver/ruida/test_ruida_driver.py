@@ -8,6 +8,7 @@ not mocks, ensuring end-to-end protocol compliance.
 import asyncio
 import logging
 from collections.abc import AsyncGenerator
+from unittest.mock import MagicMock
 
 import pytest
 import pytest_asyncio
@@ -878,8 +879,15 @@ async def test_multiple_keepalive_cycles(driver, ruida_simulator):
     await driver.cleanup()
 
 
-def test_supports_pwm_false_for_diode():
+def _pwm_driver(profile):
     driver = RuidaDriver.__new__(RuidaDriver)
+    driver._machine = MagicMock()
+    driver._machine.driver_args = {"job_profile": profile}
+    return driver
+
+
+def test_supports_pwm_false_for_diode():
+    driver = _pwm_driver("rf-research")
     laser = Laser()
     laser.laser_type = LaserType.DIODE
 
@@ -887,43 +895,41 @@ def test_supports_pwm_false_for_diode():
     assert driver.get_pwm_params(laser) is None
 
 
-def test_supports_pwm_true_for_co2():
-    driver = RuidaDriver.__new__(RuidaDriver)
+def test_supports_rf_frequency_for_co2():
+    driver = _pwm_driver("rf-research")
     laser = Laser()
     laser.laser_type = LaserType.CO2
-    laser.pwm_frequency = 1000
-    laser.max_pwm_frequency = 5000
+    laser.pwm_frequency = 15_000
     laser.pulse_width = 50
-    laser.min_pulse_width = 5
-    laser.max_pulse_width = 500
 
     assert driver.supports_pwm(laser) is True
     params = driver.get_pwm_params(laser)
     assert params is not None
-    assert params.frequency == 1000
-    assert params.max_frequency == 5000
-    assert params.pulse_width == 50
-    assert params.min_pulse_width == 5
-    assert params.max_pulse_width == 500
+    assert params.frequency == 15_000
+    assert params.min_frequency == 10_000
+    assert params.max_frequency == 20_000
+    assert params.pulse_width is None
 
 
-def test_supports_pwm_true_for_fiber():
-    driver = RuidaDriver.__new__(RuidaDriver)
+def test_supports_pulse_width_for_fiber():
+    driver = _pwm_driver("fiber-research")
     laser = Laser()
     laser.laser_type = LaserType.FIBER
+    laser.pulse_width = 0.1
 
     assert driver.supports_pwm(laser) is True
-    assert driver.get_pwm_params(laser) is not None
+    params = driver.get_pwm_params(laser)
+    assert params is not None
+    assert params.frequency is None
+    assert params.pulse_width == pytest.approx(0.1)
+    assert params.min_pulse_width == 0
+    assert params.max_pulse_width == pytest.approx(0.2)
 
 
-def test_supports_pwm_co2_with_zero_frequency():
-    driver = RuidaDriver.__new__(RuidaDriver)
+def test_proven_profile_does_not_expose_pwm():
+    driver = _pwm_driver("proven")
     laser = Laser()
     laser.laser_type = LaserType.CO2
-    laser.pwm_frequency = 0
-    laser.max_pwm_frequency = 0
-    laser.pulse_width = 0
-    laser.min_pulse_width = 0
 
-    assert driver.supports_pwm(laser) is True
-    assert driver.get_pwm_params(laser) is not None
+    assert driver.supports_pwm(laser) is False
+    assert driver.get_pwm_params(laser) is None
