@@ -38,7 +38,11 @@ include = ["rayforge*"]
 enabled = true
 
 [tool.setuptools.dynamic]
-dependencies = {file = ["requirements.txt"]}
+dependencies = {file = ["requirements-pypi.txt"]}
+
+[tool.rayforge.public-dependency-overrides]
+raygeo = "==1.37.0"
+ruida-re = "==0.1.0"
 
 [tool.ruff]
 builtins = ["_"]

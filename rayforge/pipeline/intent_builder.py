@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import inspect
 import json
 import logging
 import math
@@ -203,8 +204,15 @@ class IntentBuilder:
 
         if step_tokens:
             self._build_job_node(doc, nodes, step_tokens)
-            self._build_machine_transform_node(doc, nodes, step_tokens)
-            self._build_encoder_node(doc, nodes, step_tokens)
+            machine_transform_token = self._build_machine_transform_node(
+                doc, nodes, step_tokens
+            )
+            self._build_encoder_node(
+                doc,
+                nodes,
+                step_tokens,
+                machine_transform_token,
+            )
         return nodes
 
     # ------------------------------------------------------------------
@@ -268,7 +276,7 @@ class IntentBuilder:
     ) -> None:
         key = step_key(step.uid)
         token = self._aggregate_token(step, layer, upstream)
-        stage = self._step_stage(step, upstream)
+        stage = self._step_stage(step, layer, upstream)
         out.append(self._make_request(key, token, stage))
 
     def _build_job_node(
@@ -278,8 +286,8 @@ class IntentBuilder:
         step_tokens: dict[str, int],
     ) -> None:
         key = job_key()
-        token = self._job_token(doc, step_tokens)
         stage = self._job_stage(doc, step_tokens)
+        token = self._job_token(doc, step_tokens, stage)
         out.append(self._make_request(key, token, stage))
 
     def _build_machine_transform_node(
@@ -287,7 +295,7 @@ class IntentBuilder:
         doc: Doc,
         out: list[NodeRequest],
         step_tokens: dict[str, int],
-    ) -> None:
+    ) -> int | None:
         """Append the machine-transform compute node between the job
         aggregate and the encoder.
 
@@ -299,17 +307,19 @@ class IntentBuilder:
         from the job aggregate.
         """
         if self._machine is None:
-            return
+            return None
         key = job_machinexform_key()
-        token = self._machine_transform_token(doc, step_tokens)
         stage = self._build_machine_transform_stage(doc)
+        token = self._machine_transform_token(doc, step_tokens, stage)
         out.append(self._make_request(key, token, stage))
+        return token
 
     def _build_encoder_node(
         self,
         doc: Doc,
         out: list[NodeRequest],
         step_tokens: dict[str, int],
+        machine_transform_token: int | None = None,
     ) -> None:
         """Append the encoder compute node that consumes the
         machine-transform node's machine-space Ops and produces
@@ -324,7 +334,11 @@ class IntentBuilder:
         if self._machine is None:
             return
         key = job_encode_key()
-        token = self._encode_token(doc, step_tokens)
+        token = self._encode_token(
+            doc,
+            step_tokens,
+            machine_transform_token,
+        )
         stage = self._encode_stage(doc)
         out.append(self._make_request(key, token, stage))
 
@@ -365,6 +379,9 @@ class IntentBuilder:
             "step_params": step.get_cache_params(),
             "assembler_params": _canonical(self._assembler_params(step, wp)),
             "wpxf": _canonical(step.per_workpiece_transformers_dicts),
+            "process_metadata": step.get_process_metadata_json(
+                self._machine, step.layer
+            ),
         }
         if pos_sensitive:
             payload["xf_rev"] = wp.transform_revision
@@ -411,35 +428,35 @@ class IntentBuilder:
             "wpxf": _canonical(step.per_workpiece_transformers_dicts),
             "position_sensitive": step.is_position_sensitive(),
             "placements": placements,
+            "process_metadata": step.get_process_metadata_json(
+                self._machine, layer
+            ),
         }
         if step.is_position_sensitive():
             payload["stock_rev"] = self._stock_revision()
         return _hash_int(payload)
 
-    def _job_token(self, doc: Doc, step_tokens: dict[str, int]) -> int:
-        # The job aggregate concatenates the step aggregates' outputs
-        # verbatim (identity placement at the job level). Its token
-        # therefore folds in the per-step aggregate tokens so that any
-        # upstream change (workpiece move, transformer edit, step
-        # param change) propagates through to the job/encode cache.
-        payloads = []
-        for layer in doc.layers:
-            if not layer.workflow:
-                continue
-            for step in layer.workflow.steps:
-                if not step.visible:
-                    continue
-                if step.uid not in step_tokens:
-                    continue
-                payloads.append(
-                    {
-                        "step_uid": step.uid,
-                        "step_token": step_tokens.get(step.uid, 0),
-                        "step_params": step.get_cache_params(),
-                        "spxf": _canonical(step.per_step_transformers_dicts),
-                    }
-                )
-        payload: dict[str, Any] = {"kind": "job", "steps": payloads}
+    def _job_token(
+        self,
+        doc: Doc,
+        step_tokens: dict[str, int],
+        stage: StageSpec.Aggregate | None = None,
+    ) -> int:
+        """Hash the job aggregate's exact execution contract.
+
+        Upstream version tokens identify the concrete input results. The
+        canonical aggregate-spec payload covers every value that controls
+        how those results are grouped, marked, placed, linked, transformed,
+        and timed.
+        """
+        resolved_stage = (
+            self._job_stage(doc, step_tokens) if stage is None else stage
+        )
+        payload: dict[str, Any] = {
+            "kind": "job",
+            "upstream_tokens": dict(sorted(step_tokens.items())),
+            "spec": _aggregate_spec_payload(resolved_stage.spec),
+        }
         return _hash_int(payload)
 
     # ------------------------------------------------------------------
@@ -476,8 +493,10 @@ class IntentBuilder:
         """
         part, payload = step.build_compute_payload(self._machine, wp)
         step.populate_payload(payload, self._machine)
+        payload.workpiece_uid = wp.uid
         payload.transformers = self._build_transformer_specs(
             step.per_workpiece_transformers_dicts,
+            step=step,
             workpiece=wp,
         )
 
@@ -521,6 +540,7 @@ class IntentBuilder:
         self,
         transformer_dicts: list[dict[str, Any]],
         *,
+        step: Step | None = None,
         workpiece: WorkPiece | None = None,
     ) -> list[Any]:
         """Build typed Rust ``*Spec`` pyclasses from a list of
@@ -556,7 +576,7 @@ class IntentBuilder:
         if not transformers:
             return []
         stock = self._resolve_stock_geometries()
-        settings = self._transformer_settings()
+        settings = self._transformer_settings(step)
 
         specs: list = []
         for t in transformers:
@@ -565,12 +585,13 @@ class IntentBuilder:
             specs.append(t.to_spec(workpiece, stock, settings))
         return specs
 
-    def _transformer_settings(self) -> dict[str, Any] | None:
+    def _transformer_settings(
+        self, step: Step | None = None
+    ) -> dict[str, Any] | None:
         """Return the settings dict forwarded to ``to_spec``.
 
-        Currently this carries the ``driver_native_overscan`` flag so
-        :class:`OverscanTransformer` can short-circuit when the
-        machine driver handles overscan itself.
+        This carries machine-level driver capabilities and resolved
+        step-level calibration values consumed by post-processors.
         """
         if self._machine is None:
             return None
@@ -578,7 +599,18 @@ class IntentBuilder:
             native = bool(self._machine.driver.native_overscan)
         except AttributeError:
             native = False
-        return {"driver_native_overscan": native}
+        settings = {
+            "driver_native_overscan": native,
+            "bidir_x_offset_mm": float(
+                getattr(step, "bidir_x_offset_mm", 0.0)
+            ),
+        }
+        if step is not None:
+            for name in ("power", "tab_power"):
+                value = getattr(step, name, None)
+                if value is not None:
+                    settings[name] = float(value)
+        return settings
 
     def _resolve_stock_geometries(self) -> list[Any] | None:
         """Return the world-space stock boundary geometries.
@@ -635,6 +667,7 @@ class IntentBuilder:
     def _step_stage(
         self,
         step: Step,
+        layer: Layer,
         upstream: list[tuple[str, int, WorkPiece]],
     ) -> StageSpec.Aggregate:
         """
@@ -681,12 +714,21 @@ class IntentBuilder:
                 )
             )
         spec = AggregateSpec(
-            wrap_start=[],
+            wrap_start=[
+                Marker.ProcessStart(
+                    uid=step.uid,
+                    params=step.get_process_metadata_json(
+                        self._machine, layer
+                    ),
+                    _tag=True,
+                )
+            ],
             groups=groups,
-            wrap_end=[],
+            wrap_end=[Marker.ProcessEnd(uid=step.uid, _tag=True)],
             machine=self._machine_params(),
             transformers=self._build_transformer_specs(
-                step.per_step_transformers_dicts
+                step.per_step_transformers_dicts,
+                step=step,
             ),
         )
         return StageSpec.Aggregate(spec=spec)
@@ -857,10 +899,16 @@ class IntentBuilder:
 
         # Per-layer rotary mappings.
         rotary_mappings = self._build_rotary_mappings(doc, machine)
+        driver_cls = get_driver_cls(machine.driver_name or "")
 
         return MachineTransformSpec(
             source_key=job_key(),
-            linearize_curves=not machine.supports_curves,
+            linearize_arcs=(
+                not machine.supports_arcs or not driver_cls.accepts_arc_ops
+            ),
+            linearize_curves=(
+                not machine.supports_curves or not driver_cls.accepts_curve_ops
+            ),
             world_to_machine=w2m.tolist(),
             default_wcs_offset=default_wcs_offset,
             layer_wcs_offsets=layer_wcs_offsets,
@@ -955,8 +1003,10 @@ class IntentBuilder:
                 )
             return EncodeOutput.MachineCode(
                 text=encoded.text,
-                op_to_machine_code=dict(encoded.op_map.op_to_machine_code),
-                machine_code_to_op=dict(encoded.op_map.machine_code_to_op),
+                op_to_machine_code=encoded.op_map.to_line_spans(),
+                machine_code_to_op=encoded.op_map.to_line_owners(),
+                payload=encoded.payload,
+                warnings=list(encoded.warnings),
             )
 
         return encode
@@ -965,37 +1015,51 @@ class IntentBuilder:
     # Encoder token
     # ------------------------------------------------------------------
 
-    def _encode_token(self, doc: Doc, step_tokens: dict[str, int]) -> int:
+    def _encode_token(
+        self,
+        doc: Doc,
+        step_tokens: dict[str, int],
+        machine_transform_token: int | None = None,
+    ) -> int:
         """Compute the version token for the job encode node.
 
         Folds in the machine-transform node's token plus the encoder
         identity so the cache invalidates when either the machine
         transforms or the encoder config change.
         """
+        if machine_transform_token is None:
+            machine_transform_token = self._machine_transform_token(
+                doc, step_tokens
+            )
         payload = {
             "kind": "encode",
-            "mxform_token": self._machine_transform_token(doc, step_tokens),
+            "mxform_token": machine_transform_token,
             "machine": _machine_token_payload(self._machine),
         }
         return _hash_int(payload)
 
     def _machine_transform_token(
-        self, doc: Doc, step_tokens: dict[str, int]
+        self,
+        doc: Doc,
+        step_tokens: dict[str, int],
+        stage: MachineTransformSpec | None = None,
     ) -> int:
         """Compute the version token for the machine-transform node.
 
-        Folds in the job aggregate's token plus the machine identity
-        (supports_curves, reverse_z, WCS config, rotary module config)
-        so any change to the machine or job invalidates the cache.
+        Folds in the job aggregate's token plus the exact canonical
+        inputs carried by the machine-transform stage. Any stage input
+        change therefore invalidates the cache without maintaining a
+        second, partial representation of the transform configuration.
         """
+        if stage is None:
+            if self._machine is None:
+                raise ValueError("machine transform token requires a machine")
+            stage = self._build_machine_transform_stage(doc)
         payload = {
             "kind": "machine_transform",
             "job_token": self._job_token(doc, step_tokens),
-            "machine": _machine_token_payload(self._machine),
+            "stage": _machine_transform_spec_payload(stage),
         }
-        if self._machine is not None:
-            cfg = _machine_transform_config_payload(self._machine, doc)
-            payload.update(cfg)
         return _hash_int(payload)
 
 
@@ -1075,12 +1139,15 @@ def _machine_token_payload(machine: Machine | None) -> Any:
     identity for the encode token."""
     if machine is None:
         return None
+    driver_cls = get_driver_cls(machine.driver_name or "")
     return {
         "driver_name": machine.driver_name,
         "active_wcs": machine.active_wcs,
         "gcode_precision": machine.gcode_precision,
         "supports_curves": machine.supports_curves,
         "supports_arcs": machine.supports_arcs,
+        "driver_accepts_curve_ops": driver_cls.accepts_curve_ops,
+        "driver_accepts_arc_ops": driver_cls.accepts_arc_ops,
         "reverse_z_axis": machine.reverse_z_axis,
         "max_cut_speed": machine.max_cut_speed,
         "max_travel_speed": machine.max_travel_speed,
@@ -1089,32 +1156,134 @@ def _machine_token_payload(machine: Machine | None) -> Any:
     }
 
 
-def _machine_transform_config_payload(
-    machine: Machine, doc: Doc
-) -> dict[str, Any]:
-    """Build a JSON-serialisable payload of machine transform config
-    for the machine-transform token."""
-
-    payload: dict[str, Any] = {
-        "wcs_origin_is_workarea_origin": machine.wcs_origin_is_workarea_origin,
+def _rotary_mapping_payload(mapping: RotaryMappingSpec) -> dict[str, Any]:
+    """Return every execution input carried by one rotary mapping."""
+    return {
+        "layer_uid": mapping.layer_uid,
+        "diameter": mapping.diameter,
+        "gear_ratio": mapping.gear_ratio,
+        "reverse": mapping.reverse,
+        "axis_position_3d": mapping.axis_position_3d,
+        "cylinder_dir": mapping.cylinder_dir,
+        "rotary_axis": mapping.rotary_axis,
+        "replaced_axis": mapping.replaced_axis,
+        "mm_per_rotation": mapping.mm_per_rotation,
     }
-    # Rotary module UIDs per layer (to detect rotary config changes).
-    for layer in doc.layers:
-        uid = layer.uid
-        if layer.rotary_enabled:
-            module = machine.get_rotary_module_for_layer(layer)
-            if module is not None:
-                payload[f"rotary:{uid}"] = {
-                    "module_uid": module.uid,
-                    "mode": module.mode.value,
-                    "axis": module.axis.name,
-                    "mm_per_rotation": module.mm_per_rotation,
-                    "diameter": layer.rotary_diameter,
-                    "roller_diameter": module.roller_diameter,
-                    "rotary_type": module.rotary_type.value,
-                    "reverse_axis": module.reverse_axis,
-                }
-    return payload
+
+
+def _machine_transform_spec_payload(
+    stage: MachineTransformSpec,
+) -> dict[str, Any]:
+    """Return the canonical execution inputs of a transform stage."""
+    return {
+        "source_key": stage.source_key,
+        "linearize_arcs": stage.linearize_arcs,
+        "linearize_curves": stage.linearize_curves,
+        "world_to_machine": stage.world_to_machine,
+        "default_wcs_offset": stage.default_wcs_offset,
+        "layer_wcs_offsets": stage.layer_wcs_offsets,
+        "reverse_z": stage.reverse_z,
+        "rotary_mappings": [
+            _rotary_mapping_payload(mapping)
+            for mapping in stage.rotary_mappings
+        ],
+    }
+
+
+def _aggregate_spec_payload(spec: AggregateSpec) -> dict[str, Any]:
+    """Return every execution input carried by an aggregate spec."""
+    return {
+        "wrap_start": [_marker_payload(marker) for marker in spec.wrap_start],
+        "groups": [
+            {
+                "start_markers": [
+                    _marker_payload(marker) for marker in group.start_markers
+                ],
+                "inputs": [
+                    {
+                        "source_key": aggregate_input.source_key,
+                        "placement_matrix": (aggregate_input.placement_matrix),
+                        "uid": aggregate_input.uid,
+                        "target_dimensions": list(
+                            aggregate_input.target_dimensions
+                        ),
+                    }
+                    for aggregate_input in group.inputs
+                ],
+                "end_markers": [
+                    _marker_payload(marker) for marker in group.end_markers
+                ],
+                "link_mode": {
+                    "tag": group.link_mode.tag,
+                    "safe_z": group.link_mode.safe_z,
+                },
+            }
+            for group in spec.groups
+        ],
+        "wrap_end": [_marker_payload(marker) for marker in spec.wrap_end],
+        "machine": {
+            "default_feed_rate": spec.machine.default_feed_rate,
+            "default_rapid_rate": spec.machine.default_rapid_rate,
+            "acceleration": spec.machine.acceleration,
+        },
+        "transformers": [
+            _execution_spec_payload(transformer)
+            for transformer in spec.transformers
+        ],
+    }
+
+
+def _marker_payload(marker: Marker) -> dict[str, Any]:
+    """Return the discriminant and data of one aggregate marker."""
+    kind = type(marker).__name__
+    if kind not in {
+        "JobStart",
+        "JobEnd",
+        "LayerStart",
+        "LayerEnd",
+        "WorkpieceStart",
+        "WorkpieceEnd",
+        "ProcessStart",
+        "ProcessEnd",
+    }:
+        raise TypeError(f"unsupported aggregate marker: {kind}")
+    result: dict[str, Any] = {"kind": kind}
+    for field_name in ("uid", "params"):
+        if hasattr(marker, field_name):
+            result[field_name] = getattr(marker, field_name)
+    return result
+
+
+def _execution_spec_payload(value: Any) -> Any:
+    """Canonically expose public fields of a Raygeo execution spec."""
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    if isinstance(value, Mapping):
+        if not all(isinstance(key, str) for key in value):
+            raise TypeError("execution spec mapping keys must be strings")
+        return {
+            key: _execution_spec_payload(item)
+            for key, item in sorted(value.items())
+        }
+    if isinstance(value, (list, tuple)):
+        return [_execution_spec_payload(item) for item in value]
+
+    fields = {
+        name: _execution_spec_payload(getattr(value, name))
+        for name, descriptor in inspect.getmembers(
+            type(value), inspect.isdatadescriptor
+        )
+        if not name.startswith("_") and descriptor is not None
+    }
+    if not fields:
+        type_name = f"{type(value).__module__}.{type(value).__qualname__}"
+        raise TypeError(
+            f"execution spec {type_name} exposes no canonical fields"
+        )
+    return {
+        "type": f"{type(value).__module__}.{type(value).__qualname__}",
+        "fields": fields,
+    }
 
 
 def _approximate_job_ops(doc: Doc) -> Ops:

@@ -6,6 +6,7 @@ from rayforge.simulator.scene3d.compiled_scene import (
     ScanlineOverlayLayer,
     TextureLayer,
     VertexLayer,
+    materialize_array,
 )
 
 
@@ -180,7 +181,10 @@ class TestCompiledSceneArtifactRoundTrip:
         store = ArtifactStore()
         handle, loaded = _roundtrip(artifact, store, "test_ev")
 
-        assert loaded.vertex_layers[0].powered_verts.shape == (0, 3)
+        np.testing.assert_array_equal(
+            materialize_array(loaded.vertex_layers[0].powered_verts),
+            np.empty((0, 3), dtype=np.float32),
+        )
         assert len(loaded.vertex_layers[0].powered_cmd_offsets) == 0
         assert len(loaded.vertex_layers[0].travel_cmd_offsets) == 0
 

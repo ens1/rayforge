@@ -33,14 +33,20 @@ if [[ ! -f "$REQUIREMENTS_FILE" ]]; then
     exit 1
 fi
 
+is_exact_requirement() {
+    local requirement="$1"
+    [[ "$requirement" == *"=="* ]] && return 0
+    [[ "$requirement" =~ ^[A-Za-z0-9._-]+[[:space:]]+@[[:space:]]+git\+https://[^[:space:]@]+@[0-9a-f]{40}$ ]]
+}
+
 # Use pip download instead of curl/jq to ensure ABI compatibility
 # This grabs wheels matching the current system (Ubuntu 24.04/Py3.12)
 # which matches both the runner and the PPA builder.
 while IFS= read -r line || [[ -n "$line" ]]; do
     [[ -z "$line" ]] && continue
     [[ "$line" =~ ^[[:space:]]*# ]] && continue
-    if [[ "$line" != *"=="* ]]; then
-        echo "::error::Invalid requirement format (must contain '=='): $line"
+    if ! is_exact_requirement "$line"; then
+        echo "::error::Requirement is not exactly pinned: $line"
         exit 1
     fi
     
@@ -83,7 +89,7 @@ cd "$BUILD_DIR"
 cp -r "$ORIG_DIR/debian" "$TMP_SRC_DIR/"
 cd "$TMP_SRC_DIR"
 
-MAINTAINER_INFO=$(grep '^Maintainer:' debian/control | head -n 1 | sed 's/Maintainer: //')
+MAINTAINER_INFO=$(grep '^Maintainer:' debian/control | sed -n '1p' | sed 's/Maintainer: //')
 export DEBEMAIL=$(echo "$MAINTAINER_INFO" | sed -E 's/.*<(.*)>.*/\1/')
 export DEBFULLNAME=$(echo "$MAINTAINER_INFO" | sed -E 's/ <.*//')
 

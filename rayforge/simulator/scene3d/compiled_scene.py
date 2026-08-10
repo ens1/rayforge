@@ -4,17 +4,29 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import numpy as np
+from raygeo.compressed_array import CompressedArray
 
 from ...pipeline.artifact.base import BaseArtifact
 from ...pipeline.artifact.handle import BaseArtifactHandle
 
+SceneArray = np.ndarray | CompressedArray
+
+
+def materialize_array(array: SceneArray) -> np.ndarray:
+    if isinstance(array, np.ndarray):
+        return array
+    materialized = array.to_numpy()
+    if not isinstance(materialized, np.ndarray):
+        raise TypeError("Compressed scene array did not produce a NumPy array")
+    return materialized
+
 
 @dataclass
 class VertexLayer:
-    powered_verts: np.ndarray
-    powered_attrib: np.ndarray
-    travel_verts: np.ndarray
-    zero_power_verts: np.ndarray
+    powered_verts: SceneArray
+    powered_attrib: SceneArray
+    travel_verts: SceneArray
+    zero_power_verts: SceneArray
     powered_cmd_offsets: np.ndarray = field(
         default_factory=lambda: np.array([], dtype=np.int32)
     )
@@ -26,7 +38,7 @@ class VertexLayer:
 
 @dataclass
 class TextureLayer:
-    power_texture: np.ndarray
+    power_texture: SceneArray
     width_px: int
     height_px: int
     model_matrix: np.ndarray
@@ -39,8 +51,8 @@ class TextureLayer:
 
 @dataclass
 class ScanlineOverlayLayer:
-    positions: np.ndarray
-    overlay_attrib: np.ndarray
+    positions: SceneArray
+    overlay_attrib: SceneArray
     cmd_offsets: np.ndarray
     is_rotary: bool = False
 

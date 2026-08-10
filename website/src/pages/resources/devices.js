@@ -20,6 +20,8 @@ const SECTION_GROUP = {
   SmoothieDriver: 'Smoothieware',
   MarlinSerialDriver: 'Marlin',
   RuidaDriver: 'Ruida',
+  RuidaSerialDriver: 'Ruida',
+  RuidaUdpProgramDriver: 'Ruida',
   OctoPrintDriver: 'OctoPrint',
 };
 

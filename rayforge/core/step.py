@@ -1,3 +1,4 @@
+import json
 import logging
 from abc import ABC
 from gettext import gettext as _
@@ -42,6 +43,58 @@ _COOLANT_MODE_BY_NAME = {
 }
 
 
+def _color_to_rgb(color: str | None) -> list[int] | None:
+    if not isinstance(color, str) or not color.startswith("#"):
+        return None
+    value = color[1:]
+    if len(value) == 3:
+        value = "".join(channel * 2 for channel in value)
+    if len(value) != 6:
+        return None
+    try:
+        return [int(value[i : i + 2], 16) for i in (0, 2, 4)]
+    except ValueError:
+        return None
+
+
+def _step_has_z_motion(step: "Step") -> bool:
+    depth_levels = int(getattr(step, "num_depth_levels", 1))
+    if depth_levels > 1 and float(getattr(step, "z_step_down", 0.0)) != 0:
+        return True
+    if step.uses_global_state and float(getattr(step, "safe_z", 0.0)) != 0:
+        return True
+    for transformer in step.per_step_transformers_dicts:
+        if not transformer.get("enabled", True):
+            continue
+        if transformer.get("name") != "MultiPassTransformer":
+            continue
+        if int(transformer.get("passes", 1)) <= 1:
+            continue
+        if float(transformer.get("z_step_down", 0.0)) != 0:
+            return True
+    return False
+
+
+def _rotary_process_intent(
+    machine: "Machine",
+    layer: "Layer | None",
+) -> dict[str, Any]:
+    enabled = bool(layer and layer.rotary_enabled)
+    result: dict[str, Any] = {
+        "rotary": enabled,
+        "rotary_mode": None,
+        "rotary_axis": None,
+    }
+    if not enabled or layer is None:
+        return result
+    module = machine.get_rotary_module_for_layer(layer)
+    if module is None:
+        return result
+    result["rotary_mode"] = module.mode.value
+    result["rotary_axis"] = module.axis.name
+    return result
+
+
 def legacy_producer_params(data: dict[str, Any]) -> dict[str, Any]:
     """Return the legacy ``opsproducer_dict.params`` payload, if any.
 
@@ -73,6 +126,7 @@ class Step(DocItem, ABC):
     CAPABILITIES: tuple[StepCapability, ...] = ()
     REQUIRED_MACHINE_CAPS: ClassVar[frozenset[MachineCapability]] = frozenset()
     ASSEMBLER_NAME: ClassVar[str] = ""
+    PROCESS_KIND: ClassVar[str] = "generic"
     uses_global_state: ClassVar[bool] = False
 
     def __init__(
@@ -255,9 +309,64 @@ class Step(DocItem, ABC):
         power) and never read attributes they do not own.
         """
         payload.cut_speed = self.cut_speed
+        payload.rapid_speed = self.travel_speed
         head = self.get_selected_head(machine)
         payload.head_uid = head.uid if head else None
         payload.power = 0.0
+
+    def get_process_metadata(
+        self,
+        machine: "Machine",
+        layer: "Layer | None" = None,
+    ) -> dict[str, Any]:
+        """Return the versioned encoder-facing process contract.
+
+        The final ``Ops`` stream carries this document on its process-start
+        marker. Drivers can therefore validate process requirements without
+        guessing them from geometry or consulting the mutable document.
+        Domain bases extend the stable envelope with their own parameters.
+        """
+        head = self.get_selected_head(machine)
+        color = self.get_operation_color(head)
+        rotary = _rotary_process_intent(machine, layer)
+        return {
+            "schema": "rayforge.process",
+            "version": 1,
+            "identity": {
+                "uid": self.uid,
+                "step_type": type(self).__name__,
+                "name": self.name,
+                "color_rgb": _color_to_rgb(color),
+            },
+            "kind": self.PROCESS_KIND,
+            "motion": {
+                "cut_speed_mm_min": self.cut_speed,
+                "rapid_speed_mm_min": self.travel_speed,
+            },
+            "head_uid": head.uid if head else None,
+            "head_tool_number": head.tool_number if head else None,
+            "power": None,
+            "air_assist": None,
+            "frequency_hz": None,
+            "pulse_width_us": None,
+            "raster": None,
+            "axes": {
+                "z_motion": _step_has_z_motion(self),
+                **rotary,
+            },
+        }
+
+    def get_process_metadata_json(
+        self,
+        machine: "Machine",
+        layer: "Layer | None" = None,
+    ) -> str:
+        """Serialize :meth:`get_process_metadata` canonically."""
+        return json.dumps(
+            self.get_process_metadata(machine, layer),
+            sort_keys=True,
+            separators=(",", ":"),
+        )
 
     def get_cache_params(self) -> dict[str, Any]:
         """JSON-serialisable step attributes that influence compute output.

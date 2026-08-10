@@ -44,7 +44,7 @@ from raygeo.cnc.execution.intent import (
 from raygeo.pipeline.execute import Pipeline as RaygeoPipeline
 from raygeo.pipeline.request import NodeRequest
 
-from .intent_builder import IntentBuilder, parse_workpiece_key
+from .intent_builder import JOB_ENCODE_KEY, IntentBuilder, parse_workpiece_key
 
 if TYPE_CHECKING:
     from ..core.doc import Doc
@@ -355,9 +355,29 @@ class IntentController:
         """Emit ``rebuild_finished`` on the main thread."""
         self.rebuild_finished.send(self)
 
-    def _emit_pipeline_error(self, error_kind: ErrorKind) -> None:
+    def _emit_pipeline_error(
+        self,
+        error_kind: ErrorKind,
+        message: str,
+    ) -> None:
         """Emit ``pipeline_error`` on the main thread."""
-        self.pipeline_error.send(self, error_kind=error_kind)
+        self.pipeline_error.send(
+            self,
+            error_kind=error_kind,
+            message=message,
+        )
+
+    def _emit_job_generation_terminal(
+        self,
+        task_status: str,
+        message: str,
+    ) -> None:
+        self.job_generation_finished.send(
+            self,
+            handle=None,
+            task_status=task_status,
+            error=message,
+        )
 
     def _emit_pipeline_warnings(self, warnings: list) -> None:
         """Emit ``pipeline_warnings`` on the main thread."""
@@ -388,21 +408,38 @@ class IntentController:
             )
             return
         if node.error is not None:
-            kind = node.error_kind
+            kind = node.error_kind or ErrorKind.OTHER
             if kind == ErrorKind.CANCELLED:
                 logger.debug("Node %s was cancelled", node.key)
+                if node.key == JOB_ENCODE_KEY:
+                    self._task_manager.schedule_on_main_thread(
+                        self._emit_job_generation_terminal,
+                        "cancelled",
+                        "Job generation was cancelled.",
+                    )
                 return
             if kind == ErrorKind.UPSTREAM_FAILED:
                 logger.debug("Node %s: upstream failed", node.key)
+                if node.key == JOB_ENCODE_KEY:
+                    self._task_manager.schedule_on_main_thread(
+                        self._emit_job_generation_terminal,
+                        "failed",
+                        "Job encoding failed because an upstream pipeline "
+                        "stage failed.",
+                    )
                 return
-            if kind == ErrorKind.CACHE_BUDGET_EXCEEDED:
-                logger.error("Node %s failed: %s", node.key, node.error)
-                self._task_manager.schedule_on_main_thread(
-                    self._emit_pipeline_error, kind
-                )
-                return
-            # Internal errors (cache type mismatch, etc.) — log only.
             logger.error("Node %s failed: %s", node.key, node.error)
+            self._task_manager.schedule_on_main_thread(
+                self._emit_pipeline_error,
+                kind,
+                node.error,
+            )
+            if node.key == JOB_ENCODE_KEY:
+                self._task_manager.schedule_on_main_thread(
+                    self._emit_job_generation_terminal,
+                    "failed",
+                    node.error,
+                )
             return
         key = node.key
         item = self._key_to_item.get(key)

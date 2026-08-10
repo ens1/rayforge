@@ -14,7 +14,7 @@ import pytest_asyncio
 from raygeo.ops import Ops
 
 from rayforge.core.doc import Doc
-from rayforge.machine.driver.driver import Axis
+from rayforge.machine.driver.driver import Axis, DeviceConnectionError
 from rayforge.machine.driver.ruida.ruida_driver import RuidaDriver
 from rayforge.machine.driver.ruida.ruida_encoder import RuidaEncoder
 from rayforge.machine.driver.ruida.ruida_simulator import RuidaSimulator
@@ -23,6 +23,7 @@ from rayforge.machine.models.laser import Laser, LaserType
 from rayforge.machine.models.machine import Machine
 from rayforge.machine.transport.transport import TransportStatus
 from rayforge.machine.transport.udp_server import UdpServerTransport
+from rayforge.pipeline.encoder.base import EncodedOutput, MachineCodeOpMap
 
 logger = logging.getLogger(__name__)
 
@@ -498,27 +499,23 @@ async def test_run_probe_cycle_not_supported(driver):
 
 
 @pytest.mark.asyncio
-async def test_run_with_machine_code(driver, ruida_simulator):
-    """Test that run method executes encoded commands on the simulator."""
-    sim, _host, _port, _jog_port = ruida_simulator
+async def test_legacy_run_fails_closed(driver, ruida_simulator):
+    """The legacy job path must not transmit a complete RD container."""
+    _sim, _host, _port, _jog_port = ruida_simulator
 
     doc = Doc()
     ops = Ops()
     ops.move_to(10.0, 20.0)
     ops.line_to(30.0, 40.0)
 
-    encoded = driver.get_encoder().encode(ops, driver._machine, doc)
+    encoded = EncodedOutput(
+        text="",
+        op_map=MachineCodeOpMap(),
+        payload=b"complete-rd",
+    )
 
-    assert await wait_for_connection(driver)
-
-    sim.x = 0
-    sim.y = 0
-
-    await driver.run(encoded, doc, ops)
-    await asyncio.sleep(0.2)
-
-    assert sim.x == 30000
-    assert sim.y == 40000
+    with pytest.raises(DeviceConnectionError, match="cannot transfer"):
+        await driver.run(encoded, doc, ops)
 
     await driver.cleanup()
 

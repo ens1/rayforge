@@ -390,7 +390,7 @@ def test_controller_page_enter_preselects_matching_driver(
     assert page.ready is True
     profile = _profile()
     assert page.apply_to_profile(profile)
-    assert profile.machine_config.driver == "RuidaDriver"
+    assert profile.machine_config.driver == "RuidaUdpProgramDriver"
 
 
 @pytest.mark.ui

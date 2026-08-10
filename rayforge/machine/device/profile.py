@@ -11,7 +11,7 @@ import yaml
 from ...camera.models.camera import Camera
 from ...camera.v4l import migrate_camera_data
 from ...core.model import Model
-from ...machine.driver import get_driver_cls
+from ...machine.driver import canonicalize_driver_config, get_driver_cls
 from ...machine.models.dialect import GcodeDialect
 from ...machine.models.head import head_from_dict
 from ...machine.models.machine import Machine, Origin
@@ -105,7 +105,14 @@ def parse_machine_config(data: dict, manifest_path: Path) -> "MachineConfig":
             value = tuple(value)
         kwargs[key] = value
 
-    return MachineConfig(**kwargs)
+    machine_config = MachineConfig(**kwargs)
+    driver, driver_args = canonicalize_driver_config(
+        machine_config.driver,
+        machine_config.driver_args,
+    )
+    machine_config.driver = driver
+    machine_config.driver_args = driver_args
+    return machine_config
 
 
 def _validate_machine_config(config: dict[str, Any], manifest_path: Path):

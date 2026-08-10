@@ -451,6 +451,32 @@ class TestMachine:
         assert new_data["reverse_x_axis"] is True
         assert new_data["reverse_y_axis"] is False
 
+    def test_serialization_migrates_legacy_ruida_driver(self, lite_context):
+        legacy_data = {
+            "machine": {
+                "name": "Legacy Ruida Machine",
+                "driver": "RuidaDriver",
+                "driver_args": {
+                    "host": "192.0.2.10",
+                    "main_port": 50201,
+                    "jog_port": 50207,
+                    "response_port": 40201,
+                },
+            }
+        }
+
+        machine = Machine.from_dict(legacy_data, context=lite_context)
+
+        assert machine.driver_name == "RuidaUdpProgramDriver"
+        assert machine.driver_args == {
+            "host": "192.0.2.10",
+            "port": 50201,
+            "local_port": 40201,
+        }
+        serialized = machine.to_dict()["machine"]
+        assert serialized["driver"] == "RuidaUdpProgramDriver"
+        assert serialized["driver_args"] == machine.driver_args
+
     @pytest.mark.asyncio
     async def test_send_job_calls_driver_run(
         self,

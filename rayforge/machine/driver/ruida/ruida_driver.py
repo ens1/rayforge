@@ -1,5 +1,4 @@
 import asyncio
-import inspect
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import replace
@@ -19,6 +18,7 @@ from ...transport import TransportStatus
 from ...transport.udp import UdpTransport
 from ..driver import (
     Axis,
+    DeviceConnectionError,
     DeviceStatus,
     Driver,
     DriverMaturity,
@@ -393,36 +393,13 @@ class RuidaDriver(Driver):
         ops: "Ops",
         on_command_done: Callable[[int], None | Awaitable[None]] | None = None,
     ) -> None:
-        binary_data = encoded.driver_data.get("binary", b"")
-        text_lines = [
-            line.strip() for line in encoded.text.splitlines() if line.strip()
-        ]
-        op_map = encoded.op_map
-
-        if on_command_done is not None:
-            num_ops = 0
-            if op_map and op_map.op_to_machine_code:
-                num_ops = max(op_map.op_to_machine_code.keys()) + 1
-
-            for op_index in range(num_ops):
-                result = on_command_done(op_index)
-                if inspect.isawaitable(result):
-                    await result
-
-        logger.info(
-            f"Executing {len(text_lines)} commands",
-            extra=self._log_extra("USER_COMMAND"),
+        del encoded, doc, ops, on_command_done
+        raise DeviceConnectionError(
+            _(
+                "The legacy Ruida UDP driver cannot transfer jobs safely. "
+                "Use RuidaUdpProgramDriver or RuidaSerialDriver."
+            )
         )
-
-        for line in text_lines:
-            logger.info(line, extra=self._log_extra("USER_COMMAND"))
-
-        if binary_data and self._client:
-            for i in range(0, len(binary_data), self.CHUNK_SIZE):
-                chunk = binary_data[i : i + self.CHUNK_SIZE]
-                await self._client.send_command(chunk)
-
-        self.job_finished.send(self)
 
     async def run_raw(self, machine_code: str) -> None:
         """

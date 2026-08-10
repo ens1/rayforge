@@ -1,5 +1,7 @@
-raygeo @ git+https://github.com/ens1/raygeo.git@d14784963ea6abd0c91c18bf1cc6a362d7057519
-ruida-re @ git+https://github.com/ens1/ruida-re.git@cdade20b6796780d64456dd45f849dc57c04f1d0 ; python_version >= "3.11"
+# Public-index dependencies used in Rayforge wheel and sdist metadata.
+# Publish these exact Raygeo and ruida-re releases before publishing Rayforge.
+raygeo==1.37.0
+ruida-re==0.1.0 ; python_version >= "3.11"
 aiohttp==3.14.3
 asyncudp==0.11.0
 blinker==1.9.0

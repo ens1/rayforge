@@ -26,7 +26,7 @@ from ...pipeline.coordspace import MachineSpace
 from ...shared.tasker import task_mgr
 from ...shared.units.system import UnitSystem
 from ..assembly import Assembly
-from ..driver import get_driver_cls
+from ..driver import canonicalize_driver_config, get_driver_cls
 from ..driver.driver import DeviceState, Pos, PWMParams, pwm_varset
 from ..kinematics import HeadSpec, Kinematics, build_assembly
 from ..models.axis import AxisConfig, AxisDirection, AxisSet, AxisType
@@ -524,8 +524,11 @@ class Machine:
         self.changed.send(self)
 
     def set_driver(self, driver_cls: type["Driver"], args=None):
-        new_driver_name = driver_cls.__name__
-        new_args = args or {}
+        new_driver_name, migrated_args = canonicalize_driver_config(
+            driver_cls.__name__, args
+        )
+        assert new_driver_name is not None
+        new_args = migrated_args or {}
         if (
             self.driver_name == new_driver_name
             and self.driver_args == new_args
@@ -1626,8 +1629,11 @@ class Machine:
         ma_data = data.get("machine", {})
         ma.id = ma_data.get("id", ma.id)
         ma.name = ma_data.get("name", ma.name)
-        ma.driver_name = ma_data.get("driver")
-        ma.driver_args = ma_data.get("driver_args", {})
+        ma.driver_name, migrated_args = canonicalize_driver_config(
+            ma_data.get("driver"),
+            ma_data.get("driver_args", {}),
+        )
+        ma.driver_args = migrated_args or {}
         ma.driver_config = ma_data.get("driver_config", {})
         ma.auto_connect = ma_data.get("auto_connect", ma.auto_connect)
         ma.clear_alarm_on_connect = ma_data.get(

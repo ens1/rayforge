@@ -98,6 +98,7 @@ class Pipeline:
         )
         self._connect_ctl_signals()
         machine.changed.connect(self._on_machine_changed)
+        machine.wcs_updated.connect(self._on_machine_changed)
 
         if doc:
             self._intent_ctl.connect()
@@ -237,9 +238,11 @@ class Pipeline:
             return
         if self._machine is not None:
             self._machine.changed.disconnect(self._on_machine_changed)
+            self._machine.wcs_updated.disconnect(self._on_machine_changed)
         self._machine = machine
         self._intent_ctl.set_machine(machine)
         machine.changed.connect(self._on_machine_changed)
+        machine.wcs_updated.connect(self._on_machine_changed)
 
     # ------------------------------------------------------------------
     # Recalculate
@@ -260,6 +263,7 @@ class Pipeline:
         self._is_shutting_down = True
         if self._machine is not None:
             self._machine.changed.disconnect(self._on_machine_changed)
+            self._machine.wcs_updated.disconnect(self._on_machine_changed)
         self._intent_ctl.shutdown()
         self._wp_handles.clear()
         self._step_handles.clear()
@@ -284,16 +288,23 @@ class Pipeline:
     def _on_data_stale(self, sender) -> None:
         self.data_stale.send(self)
 
-    def _on_pipeline_error(self, sender, *, error_kind) -> None:
+    def _on_pipeline_error(
+        self,
+        sender,
+        *,
+        error_kind,
+        message: str | None = None,
+    ) -> None:
         if error_kind == ErrorKind.CACHE_BUDGET_EXCEEDED:
-            message = (
+            user_message = (
                 "Scene too complex for the current cache budget. "
                 "Reduce the number of layers or increase the cache budget."
             )
         else:
-            message = f"Pipeline error: {error_kind.value}"
-        logger.error("Pipeline execution error: %s", message)
-        self.pipeline_error.send(self, message=message)
+            detail = message or error_kind.value
+            user_message = f"Pipeline error: {detail}"
+        logger.error("Pipeline execution error: %s", user_message)
+        self.pipeline_error.send(self, message=user_message)
 
     def _on_pipeline_warnings(self, sender, *, warnings) -> None:
         """Forward assembler warnings to the UI for translation."""
@@ -357,12 +368,22 @@ class Pipeline:
             time_est = output.time_estimate
             self.job_time_updated.send(self, total_seconds=time_est)
 
-    def _on_job_encoded(self, sender, *, handle, task_status) -> None:
+    def _on_job_encoded(
+        self,
+        sender,
+        *,
+        handle,
+        task_status,
+        error: str | None = None,
+    ) -> None:
         if self._is_shutting_down:
             return
         if handle is None:
             self.job_generation_finished.send(
-                self, handle=None, task_status=task_status
+                self,
+                handle=None,
+                task_status=task_status,
+                error=error,
             )
             return
         agg = self._last_aggregate_output
@@ -371,14 +392,14 @@ class Pipeline:
             return
 
         text = handle.text or ""
-        op_to_mc = handle.op_to_machine_code or {}
-        mc_to_op = handle.machine_code_to_op or {}
         encoded = EncodedOutput(
             text=text,
-            op_map=MachineCodeOpMap(
-                op_to_machine_code=dict(op_to_mc),
-                machine_code_to_op=dict(mc_to_op),
+            op_map=MachineCodeOpMap.from_raygeo(
+                handle.op_to_machine_code,
+                handle.machine_code_to_op,
             ),
+            payload=handle.payload,
+            warnings=tuple(handle.warnings or ()),
         )
 
         ops = agg.ops
@@ -476,8 +497,18 @@ class Pipeline:
             )
             return
 
-        def _on_finished(sender, *, handle, task_status):
+        def _on_finished(
+            sender,
+            *,
+            handle,
+            task_status,
+            error: str | None = None,
+        ):
             self.job_generation_finished.disconnect(_on_finished)
+            if error is not None or task_status != "completed":
+                failure = error or f"Job generation {task_status}."
+                when_done(None, RuntimeError(failure))
+                return
             when_done(handle, None)
 
         self.job_generation_finished.connect(_on_finished, weak=False)

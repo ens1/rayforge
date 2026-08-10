@@ -36,7 +36,8 @@ rust = "==1.97.1"
 patchelf = "==0.18.0|==0.17.2"
 
 [feature.app.pypi-dependencies]
-raygeo = "==1.33.0"
+raygeo = "*"
+ruida-re = "*"
 rayforge = { editable = true, path = "." }
 aiohttp = "==3.14.3"
 asyncudp = "==0.11.0"
@@ -102,6 +103,10 @@ pillow = "==12.3.0"
 
 [tool.pixi]
 workdir = "."
+
+[pypi-options.dependency-overrides]
+raygeo = { git = "https://github.com/ens1/raygeo.git", rev = "d14784963ea6abd0c91c18bf1cc6a362d7057519" }
+ruida-re = { git = "https://github.com/ens1/ruida-re.git", rev = "cdade20b6796780d64456dd45f849dc57c04f1d0" }
 
 [tasks]
 pre-commit-install = "pre-commit install"

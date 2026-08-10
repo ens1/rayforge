@@ -64,6 +64,37 @@ def test_step_initialization(step):
     assert step.travel_speed == 5000
 
 
+def test_process_metadata_preserves_motion_and_z_intent(step):
+    machine = MagicMock()
+    machine.heads = []
+    step.cut_speed = 750
+    step.travel_speed = 4200
+    step.per_step_transformers_dicts = [
+        {
+            "name": "MultiPassTransformer",
+            "enabled": True,
+            "passes": 3,
+            "z_step_down": 0.25,
+        }
+    ]
+
+    metadata = step.get_process_metadata(machine)
+
+    assert metadata["schema"] == "rayforge.process"
+    assert metadata["version"] == 1
+    assert metadata["kind"] == "generic"
+    assert metadata["motion"] == {
+        "cut_speed_mm_min": 750,
+        "rapid_speed_mm_min": 4200,
+    }
+    assert metadata["axes"] == {
+        "z_motion": True,
+        "rotary": False,
+        "rotary_mode": None,
+        "rotary_axis": None,
+    }
+
+
 def test_setters_and_signals(step):
     """
     Tests that property setters update the value and fire the 'updated'

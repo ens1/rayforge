@@ -213,8 +213,10 @@ class MachineController:
         if old_driver:
             await old_driver.cleanup()
 
-        if self.machine.auto_connect and not isinstance(
-            new_driver, NoDeviceDriver
+        if (
+            self.machine.auto_connect
+            and new_driver.state.error is None
+            and not isinstance(new_driver, NoDeviceDriver)
         ):
             logger.info(
                 f"Machine '{self.machine.name}' (id:{self.machine.id}) "

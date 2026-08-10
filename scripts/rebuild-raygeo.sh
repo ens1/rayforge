@@ -43,12 +43,7 @@ if [[ -f "$PIXI_LOCK" ]]; then
     cp "$PIXI_LOCK" "$backup/pixi.lock"
 fi
 
-cat >> "$PIXI_TOML" <<EOF
-
-$MARKER
-[pypi-options.dependency-overrides]
-raygeo = { path = "$RAYGEO_ABS", editable = true }
-EOF
+python3 "$SCRIPT_DIR/pixi_raygeo_override.py" "$PIXI_TOML" "$RAYGEO_ABS"
 
 cd "$ROOT_DIR"
 

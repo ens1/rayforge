@@ -15,6 +15,7 @@ from raygeo.ops import LayerInfo, Ops
 from .compiled_scene import (
     CompiledSceneArtifact,
     ScanlineOverlayLayer,
+    SceneArray,
     TextureLayer,
     VertexLayer,
 )
@@ -33,7 +34,7 @@ PX_PER_MM = 50.0
 def _rasterize_scanlines(
     ops: Ops,
     bbox: tuple[float, float, float, float],
-) -> tuple[np.ndarray, int, int, float] | None:
+) -> tuple[SceneArray, int, int, float] | None:
     x0, y0, w_mm, h_mm = bbox
     if w_mm <= 0 or h_mm <= 0:
         return None
@@ -54,22 +55,16 @@ def _rasterize_scanlines(
     if width_px <= 0 or height_px <= 0:
         return None
 
-    buffer = rasterize_scanlines(
+    buffer: SceneArray = rasterize_scanlines(
         ops,
         width_px,
         height_px,
         (px_per_mm, px_per_mm),
         origin_mm=(x0, y0),
+        radius_px=1,
     )
-    if not np.any(buffer):
+    if isinstance(buffer, np.ndarray) and not np.any(buffer):
         return None
-
-    dilated = np.zeros_like(buffer)
-    for dy in range(-1, 2):
-        for dx in range(-1, 2):
-            shifted = np.roll(np.roll(buffer, dy, axis=0), dx, axis=1)
-            np.maximum(dilated, shifted, out=dilated)
-    buffer = dilated
 
     return buffer, width_px, height_px, px_per_mm
 

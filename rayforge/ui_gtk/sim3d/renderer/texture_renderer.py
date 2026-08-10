@@ -11,7 +11,11 @@ from OpenGL import GL
 from OpenGL.error import GLError
 
 from ....pipeline.artifact.base import TextureData
-from ....simulator.scene3d import CompiledSceneArtifact, TextureLayer
+from ....simulator.scene3d import (
+    CompiledSceneArtifact,
+    TextureLayer,
+    materialize_array,
+)
 from ...shared.color_lut_provider import ColorLutProvider
 from ..gl_utils import ShaderSet
 from ..render_context import RenderContext
@@ -275,7 +279,7 @@ class TextureArtifactRenderer(BaseRenderer):
         ):
             laser_index = laser_uid_order.index(tl.laser_uid)
         tex_data = TextureData(
-            power_texture_data=tl.power_texture,
+            power_texture_data=materialize_array(tl.power_texture),
             dimensions_mm=(0.0, 0.0),
             position_mm=(0.0, 0.0),
         )

@@ -10,8 +10,9 @@
 
 # Rayforge
 
-Rayforge is a modern, cross-platform 2D CAD, G-code sender and control software for GRBL, Marlin, Ruida, and
-Smoothieware-based laser cutters and engravers.
+Rayforge is a modern, cross-platform 2D CAD, G-code sender and control
+software for GRBL, Marlin, and Smoothieware-based laser cutters and
+engravers. It also generates and transfers programs for Ruida controllers.
 Built with Gtk4 and Libadwaita, it provides a clean, native interface for Linux, MacOS and Windows, offering a full suite of tools
 for both hobbyists and professionals.
 
@@ -96,15 +97,16 @@ We also have a [Discord](https://discord.gg/sTHNdTtpQJ).
 
 ### Device Support
 
-| Device Type      | Connection Method       | Notes                                                          |
-| :--------------- | :---------------------- | :------------------------------------------------------------- |
-| **GRBL**         | Serial Port             | Supported since version 0.13. The most common connection type. |
-| **GRBL**         | Telnet                  | Supported since version 0.16.                                  |
-| **GRBL**         | Network (WiFi/Ethernet) | Connect to any GRBL device on your network.                    |
-| **Smoothieware** | Telnet                  | Supported since version 0.15.                                  |
-| **Marlin**       | Serial Port             | Supported since version 1.7.2.                                 |
-| **Ruida**        | Network (UDP)           | Connect to Ruida-based controllers via UDP.                    |
-| **OctoPrint**    | Network (HTTP API)      | Connect through an OctoPrint server.                           |
+| Device Type      | Connection Method       | Notes                                                                    |
+| :--------------- | :---------------------- | :----------------------------------------------------------------------- |
+| **GRBL**         | Serial Port             | Supported since version 0.13. The most common connection type.           |
+| **GRBL**         | Telnet                  | Supported since version 0.16.                                            |
+| **GRBL**         | Network (WiFi/Ethernet) | Connect to any GRBL device on your network.                              |
+| **Smoothieware** | Telnet                  | Supported since version 0.15.                                            |
+| **Marlin**       | Serial Port             | Supported since version 1.7.2.                                           |
+| **Ruida**        | USB Serial              | Experimental `.rd` program transfer; execution is not monitored.         |
+| **Ruida**        | Network (UDP)           | Experimental `.rd` program transfer; no controller management or status. |
+| **OctoPrint**    | Network (HTTP API)      | Connect through an OctoPrint server.                                     |
 
 ## Installation
 

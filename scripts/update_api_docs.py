@@ -1,9 +1,4 @@
-"""Download and sync raygeo API docs from the GitHub source archive.
-
-Reads the pinned raygeo version from requirements.txt, downloads the
-matching source tarball from GitHub, and syncs docs/api/ into the
-website tree.
-"""
+"""Download and sync API docs from the pinned Raygeo source archive."""
 
 import re
 import shutil
@@ -18,16 +13,26 @@ REQUIREMENTS = Path("requirements.txt")
 OUTPUT_DIR = Path("website/docs/developer/raygeo-api")
 
 
-def _get_raygeo_version() -> str:
+def _get_raygeo_source() -> tuple[str, str, str]:
     text = REQUIREMENTS.read_text()
+    vcs = re.search(
+        r"^raygeo\s*@\s*git\+(https://github\.com/[^\s@]+?)(?:\.git)?"
+        r"@([^\s;]+)",
+        text,
+        re.MULTILINE,
+    )
+    if vcs:
+        repository, revision = vcs.groups()
+        return repository, revision, revision[:12]
     match = re.search(r"^raygeo==([\d.]+)", text, re.MULTILINE)
-    if not match:
-        print(
-            f"Could not find pinned raygeo version in {REQUIREMENTS}.",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-    return match.group(1)
+    if match:
+        version = match.group(1)
+        return REPO_URL, f"v{version}", f"v{version}"
+    print(
+        f"Could not find a pinned Raygeo source in {REQUIREMENTS}.",
+        file=sys.stderr,
+    )
+    sys.exit(1)
 
 
 def _newest_mtime(files: list[Path]) -> float:
@@ -71,24 +76,24 @@ def _sync_dir(src: Path, dst: Path) -> None:
 
 
 def main() -> int:
-    version = _get_raygeo_version()
-    tar_url = f"{REPO_URL}/archive/refs/tags/v{version}.tar.gz"
+    repository, revision, label = _get_raygeo_source()
+    tar_url = f"{repository}/archive/{revision}.tar.gz"
 
     with tempfile.TemporaryDirectory() as tmp:
         archive_path = Path(tmp) / "raygeo.tar.gz"
-        print(f"Downloading raygeo v{version} source...")
+        print(f"Downloading Raygeo {label} source...")
         urllib.request.urlretrieve(tar_url, archive_path)
-
-        prefix = f"raygeo-{version}"
-        docs_src = Path(tmp) / prefix / "docs" / "api"
 
         print("Extracting docs/api from archive...")
         with tarfile.open(archive_path, "r:gz") as tar:
             tar.extractall(path=tmp, filter="data")
 
-        if not docs_src.exists():
+        candidates = list(Path(tmp).glob("*/docs/api"))
+        docs_src = candidates[0] if len(candidates) == 1 else None
+
+        if docs_src is None or not docs_src.exists():
             print(
-                f"docs/api/ not found in the v{version} archive.",
+                f"docs/api/ not found in the Raygeo {label} archive.",
                 file=sys.stderr,
             )
             return 1

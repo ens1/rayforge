@@ -14,7 +14,7 @@ from blinker import Signal
 from gi.repository import Gtk
 
 from ....machine.device.profile import DeviceProfile
-from ....machine.driver import drivers
+from ....machine.driver import drivers, get_driver_cls
 from ....machine.driver.driver import Driver
 from ...icons import get_icon
 from . import WizardPage, _makePreferencesGroup
@@ -25,6 +25,8 @@ _DRIVER_ICONS: dict[str, str] = {
     "GrblNetworkDriver": "network-wired-symbolic",
     "GrblTelnetDriver": "network-wired-symbolic",
     "RuidaDriver": "network-wired-symbolic",
+    "RuidaSerialDriver": "drive-removable-media-symbolic",
+    "RuidaUdpProgramDriver": "network-wired-symbolic",
     "GrblSerialDriver": "drive-removable-media-symbolic",
     "GrblSerialSimpleDriver": "drive-removable-media-symbolic",
     "MarlinSerialDriver": "drive-removable-media-symbolic",
@@ -155,8 +157,9 @@ class ControllerPage(WizardPage):
         self.flow_box.unselect_all()
         driver_name = profile.machine_config.driver
         if driver_name:
+            driver_cls = get_driver_cls(driver_name)
             for index, d in enumerate(self._drivers):
-                if d.__name__ == driver_name:
+                if d is driver_cls:
                     self.flow_box.select_child(self._tiles[index])
                     self.set_ready(True)
                     return

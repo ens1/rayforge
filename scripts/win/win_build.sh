@@ -86,6 +86,7 @@ pyinstaller --onedir --hide-console hide-early \
   --hidden-import "rayforge.core.expression.parser" \
   --hidden-import "rayforge.core.expression.tokenizer" \
   --hidden-import "rayforge.core.expression.validator" \
+  --hidden-import "ruida_re" \
   --additional-hooks-dir "hooks" \
   rayforge/app.py
 

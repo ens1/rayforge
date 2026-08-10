@@ -12,16 +12,17 @@ Rayforge is designed primarily for **GRBL-based controllers** but also supports 
 
 ### Compatibility Matrix
 
-| Firmware         | Version | Status        | Driver                           | Notes                  |
-| ---------------- | ------- | ------------- | -------------------------------- | ---------------------- |
-| **GRBL**         | 1.1+    | Compatible    | GRBL Serial / GRBL Serial Simple | Recommended            |
-| **grblHAL**      | 2023+   | Compatible    | GRBL Serial / GRBL Telnet        | Modern GRBL fork       |
-| **GRBL**         | 0.9     | Limited       | GRBL Serial                      | Older, may have issues |
-| **Smoothieware** | All     | Compatible    | SmoothieDriver (Telnet)          | Network-based          |
-| **Marlin**       | 2.0+    | Compatible    | Marlin Serial                    | Laser mode required    |
-| **ESP3D**        | All     | Compatible    | GRBL Telnet                      | Network-based          |
-| **OctoPrint**    | All     | Experimental  | OctoPrint                        | See notes below        |
-| **Other**        | -       | Not supported | -                                | Request support        |
+| Firmware         | Version       | Status        | Driver                           | Notes                  |
+| ---------------- | ------------- | ------------- | -------------------------------- | ---------------------- |
+| **GRBL**         | 1.1+          | Compatible    | GRBL Serial / GRBL Serial Simple | Recommended            |
+| **grblHAL**      | 2023+         | Compatible    | GRBL Serial / GRBL Telnet        | Modern GRBL fork       |
+| **GRBL**         | 0.9           | Limited       | GRBL Serial                      | Older, may have issues |
+| **Smoothieware** | All           | Compatible    | SmoothieDriver (Telnet)          | Network-based          |
+| **Marlin**       | 2.0+          | Compatible    | Marlin Serial                    | Laser mode required    |
+| **ESP3D**        | All           | Compatible    | GRBL Telnet                      | Network-based          |
+| **Ruida**        | 644XS profile | Experimental  | Ruida USB Serial / UDP Program   | Program transfer only  |
+| **OctoPrint**    | All           | Experimental  | OctoPrint                        | See notes below        |
+| **Other**        | -             | Not supported | -                                | Request support        |
 
 ---
 
@@ -475,28 +476,71 @@ $22=1       ; Homing enabled
 
 ---
 
-## Future Firmware Support
+## Additional Controller Support
 
 ### Ruida Controllers
 
-Rayforge includes experimental support for Ruida-based controllers (e.g.
-RDC6442, RDC6445, Ruida R5). The Ruida driver connects over the network and
-supports jogging, position reporting, air assist control, layer selection,
-auto-connect, and status polling.
+Rayforge includes an experimental, transfer-only backend for Ruida
+controllers. It generates complete Ruida `.rd` programs and can transfer them
+through either **Ruida (USB Serial)** or **Ruida (UDP Program)**. The protocol
+compiler is provided by
+[ruida-re](https://github.com/ens1/ruida-re), whose current execution evidence
+profile is based on LightBurn 2.1.03 output for a Ruida 644XS controller.
 
-**Features:**
+#### Program generation boundary
 
-- Network connectivity (Ethernet/WiFi)
-- Position reporting
-- Jogging controls
-- Air assist and layer selection
-- Reference point support
+Rayforge remains responsible for image processing, path planning, overscan,
+coordinate transforms, and other toolpath preparation. The final
+machine-space `Ops` stream carries explicit process boundaries using
+`ProcessStart` version 1 metadata. `RuidaEncoder` translates that neutral
+stream into a `ruida-re` `JobPlan`; `ruida-re` then compiles the plan into a
+complete, checksummed `.rd` program.
 
-**Limitations:**
+Raster axis and angle metadata retain the source-space planning intent after
+workpiece transforms. The Ruida backend derives the effective horizontal or
+vertical axis from micrometer-quantized machine-space scanlines. Rotations and
+reflections are therefore preserved, while diagonal or inconsistent final
+scan motion still fails before program generation.
 
-- Experimental — not yet fully stable
-- No G-code generation; Ruida uses its own proprietary protocol
-- Job sending is not yet supported
+This boundary keeps Ruida protocol details out of Rayforge's geometry and
+image pipeline while allowing another laser application to integrate the same
+`ruida-re` planning and protocol library.
+
+#### Evidence-backed program features
+
+- Flat XY vector cutting and engraving
+- Mixed vector and raster layers
+- Horizontal and vertical raster scans
+- Cardinal machine-space scans produced by rotated or reflected source work
+- Unidirectional and bidirectional raster strategies
+- Grayscale power modulation
+- One laser head and explicit air-assist state
+
+The encoder fails closed when a job requests a feature outside the evidenced
+profile. Unsupported features currently include Z motion, rotary axes,
+machine-space diagonal raster scans, frequency or pulse-width control, and
+multiple laser heads. These are rejected before any transfer rather than
+approximated with controller-specific guesses.
+
+#### Transfer behavior
+
+- **Ruida (USB Serial)** opens the controller link without a reply probe and
+  transfers the complete program over USB serial.
+- **Ruida (UDP Program)** probes the controller link, then transfers the same
+  complete program over UDP.
+- A successful transfer confirms that the program bytes were delivered under
+  the transport's protocol contract. It does **not** confirm that physical
+  execution has completed.
+
+:::warning
+The transfer-only drivers do not implement Ruida device management, position
+or execution status, homing, jogging, hold/resume, cancel, controller settings,
+or immediate laser controls. Use the machine's physical controller panel for
+those operations.
+:::
+
+Ruida is a binary protocol, so the G-code console, G-code macros, and G-code
+device settings do not apply to these drivers.
 
 ---
 

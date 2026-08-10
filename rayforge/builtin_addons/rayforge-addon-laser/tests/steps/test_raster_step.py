@@ -80,6 +80,46 @@ class TestEngraveStep:
         }
         assert set(kwargs.keys()) == expected_keys
 
+    @pytest.mark.parametrize(
+        ("angle", "axis"),
+        [(0.0, "horizontal"), (90.0, "vertical"), (45.0, "arbitrary")],
+    )
+    def test_process_metadata_is_explicit_for_raster(
+        self, machine, angle, axis
+    ):
+        machine.heads[0].raster_color = "#123456"
+        machine.heads[0].tool_number = 0
+        step = EngraveStep(name="engrave")
+        step.power = 0.8
+        step.min_power_level = 0.25
+        step.max_power_level = 0.75
+        step.scan_angle = angle
+        step.scan_mode = "FULL_SWEEP"
+
+        metadata = step.get_process_metadata(machine)
+
+        assert metadata["kind"] == "raster"
+        assert metadata["identity"]["color_rgb"] == [18, 52, 86]
+        assert metadata["head_tool_number"] == 0
+        assert metadata["power"] == {
+            "mode": "dynamic",
+            "value": 0.8,
+            "min": 0.2,
+            "max": pytest.approx(0.6),
+        }
+        assert metadata["raster"] == {
+            "depth_mode": "power_modulated",
+            "raster_mode": "VARIABLE_POWER",
+            "min_output_power": 0.2,
+            "max_output_power": pytest.approx(0.6),
+            "sample_power_encoding": "absolute_u8",
+            "scan_angle_degrees": angle,
+            "scan_axis": axis,
+            "scan_strategy": "bidirectional",
+            "scan_mode": "full_sweep",
+            "cross_hatch": False,
+        }
+
     def test_roundtrip_serialization(self):
         step = EngraveStep(name="Test")
         step.scan_angle = 45.0

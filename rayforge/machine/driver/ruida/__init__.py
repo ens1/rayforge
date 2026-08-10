@@ -1,9 +1,12 @@
-"""
-Ruida driver low-level protocol implementation (internal).
+"""Ruida program generation and transfer drivers."""
 
-Contains OSI layers 2-4 for Ruida protocol.
-"""
+from .ruida_serial_driver import RuidaSerialDriver
+from .ruida_udp_program_driver import RuidaUdpProgramDriver
 
-from .ruida_driver import RuidaDriver
+RuidaDriver = RuidaUdpProgramDriver
 
-__all__ = ["RuidaDriver"]
+__all__ = [
+    "RuidaDriver",
+    "RuidaSerialDriver",
+    "RuidaUdpProgramDriver",
+]

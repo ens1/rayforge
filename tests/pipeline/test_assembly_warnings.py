@@ -22,6 +22,12 @@ class _FakeWarning:
         self.detail = detail
 
 
+def test_plain_encoder_warning_is_already_user_facing():
+    warning = "Controller owns rapid speed"
+
+    assert translate_assembly_warning(warning) == warning
+
+
 def test_face_failed_with_named_face():
     from raygeo.ops.assembly import AssemblyWarningKind
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 from collections.abc import Callable, Coroutine
 from gettext import gettext as _
@@ -31,6 +32,49 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _frame_process_metadata_json(
+    machine: Machine,
+    head: Laser,
+    frame_speed: float,
+) -> str:
+    uid = "rayforge.frame"
+    power = head.frame_power_percent
+    metadata = {
+        "schema": "rayforge.process",
+        "version": 1,
+        "identity": {
+            "uid": uid,
+            "step_type": "FrameAction",
+            "name": "Frame",
+            "color_rgb": None,
+        },
+        "kind": "vector",
+        "motion": {
+            "cut_speed_mm_min": frame_speed,
+            "rapid_speed_mm_min": machine.max_travel_speed,
+        },
+        "head_uid": head.uid,
+        "head_tool_number": head.tool_number,
+        "power": {
+            "mode": "static",
+            "value": power,
+            "min": power,
+            "max": power,
+        },
+        "air_assist": False,
+        "frequency_hz": None,
+        "pulse_width_us": None,
+        "raster": None,
+        "axes": {
+            "z_motion": False,
+            "rotary": False,
+            "rotary_mode": None,
+            "rotary_axis": None,
+        },
+    }
+    return json.dumps(metadata, sort_keys=True, separators=(",", ":"))
+
+
 class MachineCmd:
     """Handles commands sent to the machine driver."""
 
@@ -38,13 +82,20 @@ class MachineCmd:
         self._editor = editor
         self._scheduler = editor.task_manager.schedule_on_main_thread
         self.job_started = Signal()
+        self.job_transferred = Signal()
         self._current_monitor: JobMonitor | None = None
         self._on_progress_callback: Callable[[dict], None] | None = None
+        self._execution_completion_unknown = False
 
     @property
     def is_job_running(self) -> bool:
         """Returns True if a monitored job is currently running."""
         return self._current_monitor is not None
+
+    @property
+    def execution_completion_unknown(self) -> bool:
+        """Whether the last successful submission lacked execution status."""
+        return self._execution_completion_unknown
 
     def select_tool(self, machine: Machine, head_index: int):
         """Adds a 'select_head' task to the task manager."""
@@ -120,7 +171,8 @@ class MachineCmd:
             if encoded is None:
                 raise RuntimeError("Pipeline did not produce encoded output.")
 
-            if machine.reports_granular_progress:
+            confirms_completion = machine.driver.confirms_execution_completion
+            if machine.reports_granular_progress and confirms_completion:
                 await machine.driver.run(
                     encoded,
                     self._editor.doc,
@@ -134,8 +186,24 @@ class MachineCmd:
                     ops,
                     on_command_done=None,
                 )
-                if self._current_monitor:
-                    self._current_monitor.mark_as_complete()
+
+            if not confirms_completion:
+                self._execution_completion_unknown = True
+                self._scheduler(
+                    self.job_transferred.send,
+                    self,
+                    machine=machine,
+                )
+                logger.info(
+                    "Job transferred. Controller execution is not "
+                    "monitored; completion and machine hours were not "
+                    "recorded."
+                )
+                return
+
+            if not machine.reports_granular_progress and self._current_monitor:
+                self._current_monitor.mark_as_complete()
+            self._execution_completion_unknown = False
 
             estimated_seconds = ops.estimate_time(
                 default_feed_rate=machine.max_cut_speed,
@@ -178,6 +246,11 @@ class MachineCmd:
         min_x, min_y, max_x, max_y = ops.rect()
 
         frame_ops = Ops()
+        process_uid = "rayforge.frame"
+        frame_ops.process_start(
+            process_uid,
+            _frame_process_metadata_json(machine, head, frame_speed),
+        )
         frame_ops.set_head(head.uid)
         frame_ops.set_power(head.frame_power_percent)
         frame_ops.set_feed_rate(frame_speed)
@@ -196,6 +269,7 @@ class MachineCmd:
             if head.frame_corner_pause > 0:
                 frame_ops.dwell(head.frame_corner_pause * 1000)
             prev = corner
+        frame_ops.process_end(process_uid)
 
         frame_with_laser = frame_ops * head.frame_repeat_count
         frame_with_laser.job_end()

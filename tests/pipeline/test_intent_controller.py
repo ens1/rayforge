@@ -10,6 +10,9 @@ loop.
 from collections.abc import Callable
 from typing import Any, ClassVar, Optional
 
+import pytest
+from raygeo.pipeline.completed import ErrorKind
+
 from rayforge.core.doc import Doc
 from rayforge.core.step import Step
 from rayforge.core.workpiece import WorkPiece
@@ -133,12 +136,13 @@ class _StubNode:
         generation_id: int,
         output: Any = None,
         error: str | None = None,
+        error_kind: ErrorKind | None = None,
     ):
         self.key = key
         self.generation_id = generation_id
         self.output = output
         self.error = error
-        self.error_kind = None
+        self.error_kind = error_kind
 
 
 def _make_doc(step: _TestStep, *workpieces: WorkPiece) -> Doc:
@@ -512,6 +516,82 @@ def test_reattach_job_encode_emits_finished(monkeypatch, isolated_machine):
     assert len(received) == 1
     assert received[0]["handle"] == "encoded"
     assert received[0]["task_status"] == "completed"
+    ctrl.shutdown()
+
+
+@pytest.mark.parametrize(
+    ("error_kind", "expected_status", "expected_message"),
+    [
+        (
+            ErrorKind.OTHER,
+            "failed",
+            "Ruida raster scan axis is unsupported",
+        ),
+        (
+            ErrorKind.UPSTREAM_FAILED,
+            "failed",
+            "Job encoding failed because an upstream pipeline stage failed.",
+        ),
+        (
+            ErrorKind.CANCELLED,
+            "cancelled",
+            "Job generation was cancelled.",
+        ),
+    ],
+)
+def test_job_encode_terminal_error_completes_generation_once(
+    monkeypatch,
+    isolated_machine,
+    error_kind,
+    expected_status,
+    expected_message,
+):
+    idle_calls: list = []
+    ctrl, _wp, _step = _make_controller_for_completed_test(
+        monkeypatch,
+        idle_calls=idle_calls,
+        machine=isolated_machine,
+    )
+    assert ctrl._doc is not None
+    ctrl._key_to_item[job_encode_key()] = ctrl._doc
+    received = []
+    errors = []
+    ctrl.job_generation_finished.connect(
+        lambda sender, **kwargs: received.append(kwargs),
+        weak=False,
+    )
+    ctrl.pipeline_error.connect(
+        lambda sender, **kwargs: errors.append(kwargs),
+        weak=False,
+    )
+    node_error = "Ruida raster scan axis is unsupported"
+    node = _StubNode(
+        key=job_encode_key(),
+        generation_id=ctrl.generation_id,
+        error=node_error,
+        error_kind=error_kind,
+    )
+
+    ctrl._on_completed(node)
+    for fn, args in idle_calls:
+        fn(*args)
+
+    assert received == [
+        {
+            "handle": None,
+            "task_status": expected_status,
+            "error": expected_message,
+        }
+    ]
+    if error_kind == ErrorKind.OTHER:
+        assert errors == [
+            {
+                "error_kind": ErrorKind.OTHER,
+                "message": node_error,
+            }
+        ]
+    else:
+        assert errors == []
     ctrl.shutdown()
 
 

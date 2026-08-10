@@ -30,8 +30,10 @@ jobs:
       - name: Upgrade dependencies
         run: |
           : > requirements.txt
+          : > requirements-pypi.txt
           pixi upgrade --pinning-strategy exact-version
           git restore requirements.txt
+          git restore requirements-pypi.txt
           python3 scripts/sync_requirements.py
           pixi clean cache -y
           pixi update
@@ -49,4 +51,5 @@ jobs:
             pixi.toml
             pixi.lock
             requirements.txt
+            requirements-pypi.txt
             debian/requirements-bundle.txt

@@ -48,12 +48,24 @@ if TYPE_CHECKING:
         ) -> float: ...
 
 
+def _scan_axis(angle: float, cross_hatch: bool) -> str:
+    if cross_hatch:
+        return "mixed"
+    normalized = angle % 180.0
+    if np.isclose(normalized, 0.0):
+        return "horizontal"
+    if np.isclose(normalized, 90.0):
+        return "vertical"
+    return "arbitrary"
+
+
 class EngraveStep(LaserStep):
     TYPELABEL = _("Engrave")
     ICON = "step-raster-symbolic"
     CAPABILITIES: tuple[StepCapability, ...] = (ENGRAVE,)
     REQUIRED_MACHINE_CAPS = frozenset({MachineCapability.LASER})
     ASSEMBLER_NAME = "raster"
+    PROCESS_KIND = "raster"
 
     @classmethod
     def recipe_varset(cls) -> VarSet:
@@ -138,6 +150,37 @@ class EngraveStep(LaserStep):
         if isinstance(head, LaserHead):
             return head.raster_color
         return None
+
+    def get_process_metadata(self, machine, layer=None) -> dict[str, Any]:
+        metadata = super().get_process_metadata(machine, layer)
+        depth_mode = DepthMode[self.depth_mode]
+        if depth_mode is DepthMode.POWER_MODULATION:
+            min_power = self.power * self.min_power_level
+            max_power = self.power * self.max_power_level
+            power_mode = "dynamic"
+        else:
+            min_power = self.power
+            max_power = self.power
+            power_mode = "static"
+        metadata["power"] = {
+            "mode": power_mode,
+            "value": self.power,
+            "min": min_power,
+            "max": max_power,
+        }
+        metadata["raster"] = {
+            "depth_mode": depth_mode.raygeo_name,
+            "raster_mode": depth_mode.raster_mode.name,
+            "min_output_power": min_power,
+            "max_output_power": max_power,
+            "sample_power_encoding": "absolute_u8",
+            "scan_angle_degrees": self.scan_angle,
+            "scan_axis": _scan_axis(self.scan_angle, self.cross_hatch),
+            "scan_strategy": "bidirectional",
+            "scan_mode": self.scan_mode.lower(),
+            "cross_hatch": self.cross_hatch,
+        }
+        return metadata
 
     def is_position_sensitive(self) -> bool:
         """The raster assembler bakes ``workpiece.bbox`` into its

@@ -7,7 +7,7 @@ import logging
 import numpy as np
 from OpenGL import GL
 
-from ....simulator.scene3d import VertexLayer
+from ....simulator.scene3d import VertexLayer, materialize_array
 from ...shared.color_lut_provider import ColorLutProvider
 from ..gl_utils import ShaderSet, set_line_width
 from ..render_context import RenderContext
@@ -83,20 +83,23 @@ class OpsRenderer(BaseRenderer):
         self, vl: VertexLayer, show_travel_moves: bool
     ):
         """Uploads a compiled vertex layer into the renderer's buffers."""
+        powered_verts = materialize_array(vl.powered_verts)
+        powered_attrib = materialize_array(vl.powered_attrib)
         if show_travel_moves:
-            pv_final = np.concatenate((vl.powered_verts, vl.zero_power_verts))
-            zero_count = vl.zero_power_verts.size // 3
+            zero_power_verts = materialize_array(vl.zero_power_verts)
+            pv_final = np.concatenate((powered_verts, zero_power_verts))
+            zero_count = zero_power_verts.size // 3
             zero_attrib = np.zeros(zero_count * 4, dtype=np.float32)
             zero_attrib[3::4] = 1.0
-            attrib = np.concatenate((vl.powered_attrib.ravel(), zero_attrib))
-            tv_final = vl.travel_verts
+            attrib = np.concatenate((powered_attrib.ravel(), zero_attrib))
+            tv_final = materialize_array(vl.travel_verts)
         else:
-            pv_final = vl.powered_verts
-            attrib = vl.powered_attrib
+            pv_final = powered_verts
+            attrib = powered_attrib
             tv_final = np.array([], dtype=np.float32)
+            zero_count = 0
 
-        powered_count = vl.powered_verts.size // 3
-        zero_count = vl.zero_power_verts.size // 3
+        powered_count = powered_verts.size // 3
         logger.debug(
             f"[UPLOAD] is_rotary={vl.is_rotary} "
             f"powered={powered_count} "

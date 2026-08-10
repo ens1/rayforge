@@ -1,4 +1,5 @@
 import asyncio
+import json
 from functools import partial
 from unittest.mock import MagicMock, PropertyMock
 
@@ -9,6 +10,10 @@ from raygeo.ops.axis import Axis
 
 from rayforge.core.config import ConfigManager
 from rayforge.machine.cmd import MachineCmd
+from rayforge.machine.driver.ruida.ruida_encoder import (
+    RuidaEncoder,
+    RuidaEncodingError,
+)
 from rayforge.machine.models.machine import Machine
 from rayforge.pipeline.artifact import JobArtifact
 from rayforge.shared.tasker.manager import TaskManager
@@ -202,6 +207,114 @@ class TestMachineCmdJobMonitoring:
 
         # 3. Verify cleanup happened
         assert machine_cmd._current_monitor is None
+
+    @pytest.mark.asyncio
+    async def test_transfer_only_job_does_not_claim_execution_completion(
+        self, machine_cmd, machine, job_artifact, mocker
+    ):
+        mocker.patch.object(
+            type(machine.driver),
+            "confirms_execution_completion",
+            new_callable=PropertyMock,
+            return_value=False,
+        )
+        run_mock = mocker.patch.object(
+            machine.driver,
+            "run",
+            new_callable=mocker.AsyncMock,
+        )
+        hours_mock = mocker.patch.object(machine, "add_machine_hours")
+        completion_mock = mocker.patch(
+            "rayforge.machine.cmd.JobMonitor.mark_as_complete"
+        )
+        progress_mock = MagicMock()
+        transferred_mock = MagicMock()
+        machine_cmd.job_transferred.connect(transferred_mock)
+
+        await machine_cmd._run_send_action(
+            job_artifact, machine, on_progress=progress_mock
+        )
+        await asyncio.sleep(0)
+
+        run_mock.assert_awaited_once()
+        assert run_mock.await_args.kwargs["on_command_done"] is None
+        hours_mock.assert_not_called()
+        completion_mock.assert_not_called()
+        progress_mock.assert_not_called()
+        transferred_mock.assert_called_once_with(machine_cmd, machine=machine)
+        assert machine_cmd.execution_completion_unknown is True
+        assert machine_cmd._current_monitor is None
+
+
+class TestMachineCmdFrame:
+    @staticmethod
+    def _configure_frame(machine, corner_pause=0.0):
+        head = machine.get_default_laser_head()
+        assert head is not None
+        head.set_frame_power(0.1)
+        head.set_frame_repeat_count(1)
+        head.set_frame_corner_pause(corner_pause)
+        return head
+
+    @pytest.mark.asyncio
+    async def test_ruida_frame_has_explicit_vector_process_contract(
+        self, machine_cmd, machine, job_artifact, mocker
+    ):
+        head = self._configure_frame(machine)
+        mocker.patch(
+            "rayforge.machine.cmd._create_driver_encoder",
+            return_value=RuidaEncoder(),
+        )
+        execute_mock = mocker.patch.object(
+            machine_cmd,
+            "_execute_monitored_job",
+            new_callable=mocker.AsyncMock,
+        )
+
+        await machine_cmd._run_frame_action(
+            job_artifact, machine, on_progress=None
+        )
+
+        execute_mock.assert_awaited_once()
+        frame_ops = execute_mock.await_args.args[0]
+        encoded = execute_mock.await_args.kwargs["encoded"]
+        starts = [
+            index
+            for index in range(frame_ops.len())
+            if frame_ops.command_type(index).name == "PROCESS_START"
+        ]
+        assert len(starts) == 1
+        start = starts[0]
+        assert frame_ops.process_uid(start) == "rayforge.frame"
+        metadata = json.loads(frame_ops.process_params(start))
+        assert metadata["schema"] == "rayforge.process"
+        assert metadata["version"] == 1
+        assert metadata["kind"] == "vector"
+        assert metadata["head_uid"] == head.uid
+        assert metadata["power"]["value"] == pytest.approx(0.1)
+        assert encoded.payload
+
+    @pytest.mark.asyncio
+    async def test_ruida_frame_with_corner_dwell_fails_closed(
+        self, machine_cmd, machine, job_artifact, mocker
+    ):
+        self._configure_frame(machine, corner_pause=0.25)
+        mocker.patch(
+            "rayforge.machine.cmd._create_driver_encoder",
+            return_value=RuidaEncoder(),
+        )
+        execute_mock = mocker.patch.object(
+            machine_cmd,
+            "_execute_monitored_job",
+            new_callable=mocker.AsyncMock,
+        )
+
+        with pytest.raises(RuidaEncodingError, match="DWELL"):
+            await machine_cmd._run_frame_action(
+                job_artifact, machine, on_progress=None
+            )
+
+        execute_mock.assert_not_awaited()
 
 
 class TestMachineCmdJog:

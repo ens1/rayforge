@@ -1,6 +1,7 @@
 import asyncio
 import zipfile
 from pathlib import Path
+from unittest.mock import AsyncMock
 
 import pytest
 import yaml
@@ -13,6 +14,7 @@ from rayforge.machine.device.profile import (
     DeviceProfile,
     export_machine_to_dir,
 )
+from rayforge.machine.driver.ruida import RuidaUdpProgramDriver
 from rayforge.machine.models.laser import LaserHead, LaserType
 from rayforge.machine.models.machine import Origin
 from rayforge.shared.tasker.manager import TaskManager
@@ -204,7 +206,7 @@ class TestDeviceProfileLoad:
             },
         )
         pkg = DeviceProfile.from_path(device_dir)
-        assert pkg.machine_config.driver == "RuidaDriver"
+        assert pkg.machine_config.driver == "RuidaUdpProgramDriver"
         assert pkg.dialect_config == {}
 
     def test_dialect_optional_when_driver_absent(self, tmp_path):
@@ -639,7 +641,7 @@ class TestExportMachine:
     def _make_mock_ruida_machine(self, name):
         return self._make_mock_machine(
             name,
-            driver_name="RuidaDriver",
+            driver_name="RuidaUdpProgramDriver",
             dialect=None,
         )
 
@@ -694,25 +696,59 @@ class TestCreateMachine:
         assert m.dialect is not None
 
     @pytest.mark.asyncio
-    async def test_create_machine_ruida_no_dialect(
-        self, tmp_path, lite_context, task_mgr
+    async def test_create_machine_migrates_legacy_ruida_driver(
+        self, tmp_path, lite_context, task_mgr, monkeypatch
     ):
+        connect = AsyncMock()
+        monkeypatch.setattr(
+            RuidaUdpProgramDriver,
+            "_connect_implementation",
+            connect,
+        )
         device_dir = tmp_path / "ruida-device"
         _write_yaml(
             device_dir / "device.yaml",
             {
                 "api_version": 1,
                 "device": {"name": "Ruida Test"},
-                "machine": {"driver": "RuidaDriver"},
+                "machine": {
+                    "driver": "RuidaDriver",
+                    "driver_args": {
+                        "host": "",
+                        "main_port": 50201,
+                        "jog_port": 50207,
+                        "response_port": 40201,
+                    },
+                },
             },
         )
         pkg = DeviceProfile.from_path(device_dir)
+        assert pkg.machine_config.driver == "RuidaUdpProgramDriver"
+        assert pkg.machine_config.driver_args == {
+            "host": "",
+            "port": 50201,
+            "local_port": 40201,
+        }
+
         m = pkg.create_machine(lite_context)
         await _wait_for_tasks(task_mgr)
 
         assert m.dialect_uid is None
         assert m.dialect is None
-        assert m.driver_name == "RuidaDriver"
+        assert m.driver_name == "RuidaUdpProgramDriver"
+        assert m.driver_args == {
+            "host": "",
+            "port": 50201,
+            "local_port": 40201,
+        }
+        assert m.driver.state.error is not None
+        connect.assert_not_awaited()
+
+        export_dir = tmp_path / "exported"
+        export_machine_to_dir(m, export_dir)
+        exported = yaml.safe_load((export_dir / MANIFEST_FILENAME).read_text())
+        assert exported["machine"]["driver"] == "RuidaUdpProgramDriver"
+        assert exported["machine"]["driver_args"] == m.driver_args
 
     @pytest.mark.asyncio
     async def test_co2_profile_loads_pwm_fields(

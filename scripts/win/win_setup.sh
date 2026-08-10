@@ -10,13 +10,26 @@ REQUIREMENTS_FILE="requirements.txt"
 req_version() {
     local pkg="$1"
     local line
-    line=$(grep -i "^${pkg}[>=<!~]" "$REQUIREMENTS_FILE" 2>/dev/null | head -1)
+    line=$(grep -i "^${pkg}[>=<!~]" "$REQUIREMENTS_FILE" 2>/dev/null | sed -n '1p')
     if [ -n "$line" ]; then
         # Strip the package name and keep the version comparator
         echo "$line" | sed "s/^${pkg}//I"
     else
         # Bare entry with no version pin
         echo ""
+    fi
+}
+
+# Return a complete pip requirement, including a direct VCS reference.
+req_requirement() {
+    local pkg="$1"
+    local line
+    line=$(grep -iE "^${pkg}([[:space:]]*@|[>=<!~]|$)" \
+        "$REQUIREMENTS_FILE" 2>/dev/null | sed -n '1p')
+    if [ -n "$line" ]; then
+        echo "$line"
+    else
+        echo "$pkg"
     fi
 }
 
@@ -194,7 +207,8 @@ if [[ "$1" == "pip" || -z "$1" ]]; then
 
     $PYTHON_BIN_PATH -m pip install --no-cache-dir \
         "pyserial$(req_version pyserial)" \
-        "raygeo$(req_version raygeo)" \
+        "$(req_requirement raygeo)" \
+        "$(req_requirement ruida-re)" \
         "ezdxf$(req_version ezdxf)" \
         "pypdf$(req_version pypdf)" \
         "trimesh$(req_version trimesh)" \

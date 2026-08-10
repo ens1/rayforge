@@ -211,7 +211,10 @@ class Driver(ABC):
     # Drivers that send files via the network may not be able to
     # report granular progress updates during the execution of a job.
     reports_granular_progress: bool = False
+    confirms_execution_completion: bool = True
     uses_gcode: bool = True
+    accepts_arc_ops: bool = True
+    accepts_curve_ops: bool = True
     maturity: DriverMaturity = DriverMaturity.STABLE
     supports_probing: bool = False
     # When True, the firmware applies its own overscan, so Rayforge's

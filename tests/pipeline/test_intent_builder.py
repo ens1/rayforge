@@ -6,11 +6,15 @@ single step (and two workpieces) and verify the keys, version tokens,
 and the position-sensitive folding rule.
 """
 
+import json
 import math
 from unittest.mock import MagicMock
 
 import pytest
-from raygeo.cnc.execution.intent import create_intent_from_nodes
+from raygeo.cnc.execution.intent import (
+    create_intent_from_nodes,
+    run_intent,
+)
 from raygeo.cnc.execution.specs import (
     AggregateGroup,
     AggregateInput,
@@ -23,11 +27,17 @@ from raygeo.cnc.execution.specs import (
     RotaryMappingSpec,
 )
 from raygeo.geo import Geometry, Matrix
+from raygeo.ops import Ops
 from raygeo.ops.assembly import Assembler
 from raygeo.ops.assembly.contour import ContourSpec
 from raygeo.ops.axis import Axis
 from raygeo.ops.convert import Encoder, GcodeSpec
 from raygeo.ops.part import Part
+from raygeo.ops.state import AirAssistMode
+from raygeo.ops.transform.bidir_scan_offset import BidirScanOffsetSpec
+from raygeo.ops.transform.tabs import TabsSpec
+from raygeo.ops.types import CommandType
+from raygeo.pipeline.execute import Pipeline as RaygeoPipeline
 from raygeo.pipeline.execute import execute_stages
 from raygeo.pipeline.request import NodeRequest
 from raygeo.pipeline.stage import StageSpec
@@ -41,6 +51,7 @@ from rayforge.core.workpiece import WorkPiece
 from rayforge.machine.models.dialect.grbl import GRBL_DIALECT
 from rayforge.machine.models.machine import Machine, Origin
 from rayforge.machine.models.rotary_module import RotaryMode, RotaryModule
+from rayforge.pipeline.encoder.base import EncodedOutput, MachineCodeOpMap
 from rayforge.pipeline.encoder.rust_helpers import dialect_to_spec
 from rayforge.pipeline.intent_builder import (
     IntentBuilder,
@@ -300,6 +311,32 @@ def test_job_token_changes_on_step_param_change(isolated_machine):
     assert before_t != after_t
 
 
+def test_job_token_tracks_markers_and_machine_params(isolated_machine):
+    step = _TestStep(name="s1")
+    wp = WorkPiece(name="wp1")
+    doc = _make_doc(step, wp)
+    layer = doc.active_layer
+
+    before = IntentBuilder(machine=isolated_machine).build(doc)
+    before_node = next(n for n in before if n.key == job_key())
+
+    layer.uid = "replacement-layer"
+    after_marker = IntentBuilder(machine=isolated_machine).build(doc)
+    marker_node = next(n for n in after_marker if n.key == job_key())
+    marker = marker_node.stage.spec.groups[0].start_markers[0]
+    assert marker.uid == "replacement-layer"
+    assert marker_node.version_token != before_node.version_token
+
+    isolated_machine.max_cut_speed += 1
+    after_machine = IntentBuilder(machine=isolated_machine).build(doc)
+    machine_node = next(n for n in after_machine if n.key == job_key())
+    assert (
+        machine_node.stage.spec.machine.default_feed_rate
+        != marker_node.stage.spec.machine.default_feed_rate
+    )
+    assert machine_node.version_token != marker_node.version_token
+
+
 # ----------------------------------------------------------------------
 # Visibility / structural filtering
 # ----------------------------------------------------------------------
@@ -475,6 +512,55 @@ def test_contour_spec_reflects_step_params(
     assert after_t != wp_node.version_token
 
 
+def test_process_metadata_changes_invalidate_compute_and_aggregate(
+    contour_step_class, test_machine_and_config
+):
+    machine, context = test_machine_and_config
+    step = contour_step_class.create(context, name="cut")
+    wp = WorkPiece(name="wp")
+    doc = _make_doc(step, wp)
+    before = IntentBuilder(machine=machine).build(doc)
+    wp_key = workpiece_key(wp.uid, step.uid)
+    aggregate_key = step_key(step.uid)
+
+    head = step.get_selected_head(machine)
+    assert head is not None
+    head.tool_number += 1
+    after_head_change = IntentBuilder(machine=machine).build(doc)
+
+    before_compute = next(
+        node.version_token for node in before if node.key == wp_key
+    )
+    before_aggregate = next(
+        node.version_token for node in before if node.key == aggregate_key
+    )
+    after_compute = next(
+        node.version_token for node in after_head_change if node.key == wp_key
+    )
+    after_aggregate = next(
+        node.version_token
+        for node in after_head_change
+        if node.key == aggregate_key
+    )
+    assert after_compute != before_compute
+    assert after_aggregate != before_aggregate
+
+    doc.active_layer.rotary_enabled = True
+    after_rotary_change = IntentBuilder(machine=machine).build(doc)
+    rotary_compute = next(
+        node.version_token
+        for node in after_rotary_change
+        if node.key == wp_key
+    )
+    rotary_aggregate = next(
+        node.version_token
+        for node in after_rotary_change
+        if node.key == aggregate_key
+    )
+    assert rotary_compute != after_compute
+    assert rotary_aggregate != after_aggregate
+
+
 def test_compute_token_changes_on_machine_arc_tolerance(
     contour_step_class, test_machine_and_config
 ):
@@ -624,6 +710,82 @@ def test_job_aggregate_has_layer_and_job_markers(
     assert len(group.end_markers) == 1
 
 
+def test_process_contract_survives_to_machine_space_ops(
+    contour_step_class, test_machine_and_config
+):
+    machine, context = test_machine_and_config
+    machine.hydrate()
+    step = contour_step_class.create(context, name="production cut")
+    step.power = 0.42
+    step.cut_speed = 720
+    step.travel_speed = 4800
+    step.air_assist = True
+    step.frequency = 18000
+    step.pulse_width = 45
+
+    geo = Geometry()
+    geo.move_to(0.0, 0.0)
+    geo.line_to(10.0, 0.0)
+    geo.line_to(10.0, 10.0)
+    geo.close_path()
+    wp = WorkPiece(name="part")
+    wp._edited_boundaries = geo
+    wp.set_size(10.0, 10.0)
+    doc = _make_doc(step, wp)
+
+    nodes = IntentBuilder(machine=machine, generation_id=1).build(doc)
+    completed = {}
+    execute_stages(nodes, lambda n: completed.__setitem__(n.key, n))
+    result = completed[job_machinexform_key()]
+    assert result.error is None, result.error
+    ops = result.output.ops
+
+    process_idx = next(
+        i
+        for i in range(ops.len())
+        if ops.command_type(i) == CommandType.PROCESS_START
+    )
+    assert ops.process_uid(process_idx) == step.uid
+    metadata = json.loads(ops.process_params(process_idx))
+    assert metadata["schema"] == "rayforge.process"
+    assert metadata["version"] == 1
+    assert metadata["kind"] == "vector"
+    assert metadata["identity"]["uid"] == step.uid
+    assert metadata["identity"]["name"] == "production cut"
+    assert metadata["head_tool_number"] == 0
+    assert metadata["motion"] == {
+        "cut_speed_mm_min": 720,
+        "rapid_speed_mm_min": 4800,
+    }
+    assert metadata["power"] == {
+        "mode": "static",
+        "value": 0.42,
+        "min": 0.42,
+        "max": 0.42,
+    }
+    assert metadata["air_assist"] is True
+    assert metadata["frequency_hz"] == 18000
+    assert metadata["pulse_width_us"] == 45
+    assert metadata["raster"] is None
+    assert metadata["axes"]["z_motion"] is False
+
+    assert any(
+        ops.command_type(i) == CommandType.SET_RAPID_RATE
+        and ops.rate(i) == 4800
+        for i in range(ops.len())
+    )
+    assert any(
+        ops.command_type(i) == CommandType.SET_AIR_ASSIST
+        and ops.air_assist(i) == AirAssistMode.ON
+        for i in range(ops.len())
+    )
+    assert any(
+        ops.command_type(i) == CommandType.PROCESS_END
+        and ops.process_uid(i) == step.uid
+        for i in range(ops.len())
+    )
+
+
 def test_job_encode_node_emits_encode_spec(
     contour_step_class, test_machine_and_config
 ):
@@ -661,6 +823,46 @@ def test_job_encode_token_changes_on_machine_swap(
     after = IntentBuilder(machine=machine).build(doc)
     after_t = next(n.version_token for n in after if n.key == ek)
     assert before_t != after_t
+
+
+def test_python_encoder_bridge_preserves_payload_and_warnings(
+    isolated_machine, monkeypatch
+):
+    payload = b"\x00\x88\xff"
+    warnings = ("controller owns rapid speed",)
+    op_map = MachineCodeOpMap(
+        op_to_machine_code={0: [0, 1], 1: [], 2: [3]},
+        machine_code_to_op={0: 0, 1: 0, 3: 2},
+    )
+    driver_encoder = MagicMock()
+    driver_encoder.encode.return_value = EncodedOutput(
+        text="program",
+        op_map=op_map,
+        payload=payload,
+        warnings=warnings,
+    )
+    driver_cls = MagicMock()
+    driver_cls.create_encoder.return_value = driver_encoder
+    monkeypatch.setattr(
+        "rayforge.pipeline.intent_builder.get_driver_cls",
+        lambda _name: driver_cls,
+    )
+    isolated_machine.driver_name = "OpaqueDriver"
+    doc = Doc()
+
+    encode = IntentBuilder(
+        machine=isolated_machine
+    )._make_python_encoder_callable(isolated_machine, doc)
+    output = encode(Ops())
+
+    assert output.text == "program"
+    assert output.payload == payload
+    assert output.warnings == list(warnings)
+    decoded = MachineCodeOpMap.from_raygeo(
+        output.op_to_machine_code,
+        output.machine_code_to_op,
+    )
+    assert decoded == op_map
 
 
 def test_contour_job_encodes_through_raygeo(
@@ -722,6 +924,125 @@ def test_machine_transform_node_present(
     assert job_idx < mx_idx < enc_idx
 
 
+def _machine_transform_snapshot(machine, doc):
+    builder = IntentBuilder(machine=machine)
+    stage = builder._build_machine_transform_stage(doc)
+    token = builder._machine_transform_token(doc, {}, stage)
+    return token, stage
+
+
+def test_machine_transform_token_tracks_exact_stage_inputs(
+    test_machine_and_config,
+):
+    machine, _context = test_machine_and_config
+    doc = Doc()
+
+    changes = [
+        ("origin", lambda: machine.set_origin(Origin.TOP_RIGHT)),
+        ("reverse X", lambda: machine.set_reverse_x_axis(True)),
+        ("reverse Y", lambda: machine.set_reverse_y_axis(True)),
+        ("reverse Z", lambda: machine.set_reverse_z_axis(True)),
+        ("arc linearization", lambda: machine.set_supports_arcs(False)),
+        (
+            "curve linearization",
+            lambda: machine.set_supports_curves(True),
+        ),
+        (
+            "default WCS offset",
+            lambda: machine.update_wcs_offset(
+                machine.active_wcs,
+                (17.0, 23.0, 5.0),
+            ),
+        ),
+        (
+            "work-area WCS mode",
+            lambda: machine.set_wcs_origin_is_workarea_origin(True),
+        ),
+        (
+            "work-area margins",
+            lambda: machine.set_work_margins(1.0, 2.0, 3.0, 4.0),
+        ),
+    ]
+
+    for label, mutate in changes:
+        before_token, before_stage = _machine_transform_snapshot(machine, doc)
+        mutate()
+        after_token, after_stage = _machine_transform_snapshot(machine, doc)
+        assert before_token != after_token, label
+        assert (
+            before_stage.world_to_machine != after_stage.world_to_machine
+            or before_stage.default_wcs_offset
+            != after_stage.default_wcs_offset
+            or before_stage.layer_wcs_offsets != after_stage.layer_wcs_offsets
+            or before_stage.reverse_z != after_stage.reverse_z
+            or before_stage.linearize_arcs != after_stage.linearize_arcs
+            or before_stage.linearize_curves != after_stage.linearize_curves
+        ), label
+
+
+def test_machine_transform_token_tracks_per_layer_wcs_offset(
+    test_machine_and_config,
+):
+    machine, _context = test_machine_and_config
+    doc = Doc()
+    layer = doc.active_layer
+    layer.set_wcs("G55")
+
+    before_token, before_stage = _machine_transform_snapshot(machine, doc)
+    machine.update_wcs_offset("G55", (31.0, 37.0, 0.0))
+    after_token, after_stage = _machine_transform_snapshot(machine, doc)
+
+    assert before_stage.default_wcs_offset == after_stage.default_wcs_offset
+    assert before_stage.layer_wcs_offsets != after_stage.layer_wcs_offsets
+    assert before_token != after_token
+
+
+def test_machine_transform_token_tracks_rotary_pose_and_axis_position(
+    test_machine_and_config,
+):
+    machine, _context = test_machine_and_config
+    doc = Doc()
+    layer = doc.active_layer
+    module = RotaryModule()
+    machine.add_rotary_module(module)
+    layer.rotary_enabled = True
+    layer.rotary_module_uid = module.uid
+
+    before_token, before_stage = _machine_transform_snapshot(machine, doc)
+    module.set_position(11.0, 13.0, 17.0)
+    position_token, position_stage = _machine_transform_snapshot(machine, doc)
+    module.set_axis_position(2.0, 3.0, 5.0)
+    axis_token, axis_stage = _machine_transform_snapshot(machine, doc)
+    module.set_rotation(0.0, 0.0, 90.0)
+    rotation_token, rotation_stage = _machine_transform_snapshot(machine, doc)
+
+    before_mapping = before_stage.rotary_mappings[0]
+    position_mapping = position_stage.rotary_mappings[0]
+    axis_mapping = axis_stage.rotary_mappings[0]
+    rotation_mapping = rotation_stage.rotary_mappings[0]
+    assert before_mapping.axis_position_3d != position_mapping.axis_position_3d
+    assert position_mapping.axis_position_3d != axis_mapping.axis_position_3d
+    assert axis_mapping.cylinder_dir != rotation_mapping.cylinder_dir
+    assert len({before_token, position_token, axis_token, rotation_token}) == 4
+
+
+def test_machine_transform_token_ignores_encoder_only_config(
+    test_machine_and_config,
+):
+    machine, _context = test_machine_and_config
+    doc = Doc()
+
+    before_token, before_stage = _machine_transform_snapshot(machine, doc)
+    machine.set_gcode_precision(machine.gcode_precision + 1)
+    after_token, after_stage = _machine_transform_snapshot(machine, doc)
+
+    assert before_stage.world_to_machine == after_stage.world_to_machine
+    assert before_stage.default_wcs_offset == after_stage.default_wcs_offset
+    assert before_stage.layer_wcs_offsets == after_stage.layer_wcs_offsets
+    assert before_stage.rotary_mappings == after_stage.rotary_mappings
+    assert before_token == after_token
+
+
 def test_machine_transform_linearizes_curves(
     contour_step_class, test_machine_and_config
 ):
@@ -753,6 +1074,40 @@ def test_machine_transform_linearizes_curves(
     assert "G5 " not in gcode
     cut_lines = [ln for ln in gcode.split("\n") if ln.startswith("G1")]
     assert len(cut_lines) > 0
+
+
+def test_machine_transform_linearizes_arcs_for_driver_backend(
+    contour_step_class, test_machine_and_config, monkeypatch
+):
+    """A backend can require lines even when the machine profile allows
+    native arcs."""
+    machine, context = test_machine_and_config
+    machine.set_supports_arcs(True)
+    monkeypatch.setattr(type(machine.driver), "accepts_arc_ops", False)
+    step = contour_step_class.create(context, name="cut")
+
+    geo = Geometry()
+    geo.move_to(0.0, 0.0)
+    geo.arc_to(10.0, 0.0, 5.0, 0.0, clockwise=True)
+
+    wp = WorkPiece(name="arc")
+    wp._edited_boundaries = geo
+    wp.set_size(50.0, 30.0)
+    doc = _make_doc(step, wp)
+
+    nodes = IntentBuilder(machine=machine, generation_id=1).build(doc)
+    completed = []
+    execute_stages(nodes, lambda node: completed.append(node))
+
+    enc_result = next(
+        result for result in completed if result.key == job_encode_key()
+    )
+    assert enc_result.error is None, enc_result.error
+    assert enc_result.output is not None
+    gcode = enc_result.output.text
+    assert "G2 " not in gcode
+    assert "G3 " not in gcode
+    assert any(line.startswith("G1") for line in gcode.splitlines())
 
 
 def test_machine_transform_true_4th_axis_rotary():
@@ -893,6 +1248,7 @@ def _build_rotary_pipeline(
 
     mt_spec = MachineTransformSpec(
         source_key="agg",
+        linearize_arcs=False,
         linearize_curves=False,
         world_to_machine=[
             [1, 0, 0, 0],
@@ -1042,6 +1398,7 @@ def test_contour_workpiece_node_carries_per_workpiece_transformers(
     wp_node = next(n for n in nodes if n.key == wpk)
     assert isinstance(wp_node.stage, StageSpec.Compute)
     payload = wp_node.stage.params
+    assert payload.workpiece_uid == wp.uid
     assert len(payload.transformers) > 0
 
 
@@ -1087,6 +1444,56 @@ def test_disabled_per_workpiece_transformer_not_wired(
     wp_node = next(n for n in nodes if n.key == wpk)
     payload = wp_node.stage.params
     assert payload.transformers == []
+
+
+def test_raster_bidir_offset_reaches_transformer_spec(
+    engrave_step_class, test_machine_and_config
+):
+    machine, context = test_machine_and_config
+    step = engrave_step_class.create(context, name="engrave")
+    step.bidir_x_offset_mm = 0.375
+    wp = WorkPiece(name="wp")
+    wp.set_size(10.0, 10.0)
+    doc = _make_doc(step, wp)
+
+    builder = IntentBuilder(machine=machine)
+    nodes = builder.build(doc)
+    wpk = workpiece_key(wp.uid, step.uid)
+    wp_node = next(n for n in nodes if n.key == wpk)
+    payload = wp_node.stage.params
+    spec = next(
+        item
+        for item in payload.transformers
+        if isinstance(item, BidirScanOffsetSpec)
+    )
+
+    assert spec.offset_mm == pytest.approx(0.375)
+    settings = builder._transformer_settings(step)
+    assert settings is not None
+    assert "driver_native_overscan" in settings
+
+
+def test_contour_power_settings_reach_tabs_transformer_spec(
+    contour_step_class, test_machine_and_config
+):
+    machine, context = test_machine_and_config
+    step = contour_step_class.create(context, name="cut")
+    step.set_power(0.8)
+    step.set_tab_power(0.25)
+    wp = WorkPiece(name="wp")
+    wp.set_size(10.0, 10.0)
+    doc = _make_doc(step, wp)
+
+    nodes = IntentBuilder(machine=machine).build(doc)
+    wpk = workpiece_key(wp.uid, step.uid)
+    wp_node = next(n for n in nodes if n.key == wpk)
+    payload = wp_node.stage.params
+    spec = next(
+        item for item in payload.transformers if isinstance(item, TabsSpec)
+    )
+
+    assert spec.tab_power == pytest.approx(0.25)
+    assert spec.original_power == pytest.approx(0.8)
 
 
 # ----------------------------------------------------------------------
@@ -1393,3 +1800,115 @@ def test_machine_transform_wcs_offset_in_gcode(
     # First G1 cut: world (95.5, -4.5) minus WCS (50, 30) = (45.5, -34.5).
     assert coords[1][0] == pytest.approx(45.5, abs=0.1)
     assert coords[1][1] == pytest.approx(-34.5, abs=0.1)
+
+
+def test_cached_machine_space_ops_invalidate_after_origin_change(
+    contour_step_class, test_machine_and_config
+):
+    machine, context = test_machine_and_config
+    machine.set_origin(Origin.BOTTOM_LEFT)
+    step = contour_step_class.create(context, name="cut")
+    step.set_cut_speed(3000)
+    step.set_power(0.5)
+
+    geo = Geometry()
+    geo.move_to(0.0, 0.0)
+    geo.line_to(10.0, 0.0)
+    geo.line_to(10.0, 10.0)
+    geo.line_to(0.0, 10.0)
+    geo.close_path()
+
+    wp = WorkPiece(name="square")
+    wp._edited_boundaries = geo
+    wp.set_size(10.0, 10.0)
+    doc = _make_doc(step, wp)
+    cache = RaygeoPipeline()
+
+    first_nodes = IntentBuilder(machine=machine, generation_id=1).build(doc)
+    intent = create_intent_from_nodes(first_nodes)
+    first_completed = {}
+    run_intent(
+        intent,
+        on_completed=lambda node: first_completed.__setitem__(node.key, node),
+        pipeline=cache,
+    )
+    first_gcode = first_completed[job_encode_key()].output.text
+
+    machine.set_origin(Origin.TOP_RIGHT)
+    second_nodes = IntentBuilder(machine=machine, generation_id=2).build(doc)
+    second_intent = create_intent_from_nodes(second_nodes)
+    intent.update(second_intent, pipeline=cache)
+    second_completed = {}
+    run_intent(
+        intent,
+        on_completed=lambda node: second_completed.__setitem__(node.key, node),
+        pipeline=cache,
+    )
+    second_gcode = second_completed[job_encode_key()].output.text
+
+    first_coords = _extract_cut_coords(first_gcode)
+    second_coords = _extract_cut_coords(second_gcode)
+    assert first_coords[0] == pytest.approx((-4.5, -4.5), abs=0.1)
+    assert second_coords[0] == pytest.approx((204.5, 154.5), abs=0.1)
+
+
+def test_cached_machine_space_ops_invalidate_after_layer_move(
+    contour_step_class, test_machine_and_config
+):
+    machine, context = test_machine_and_config
+    machine.set_origin(Origin.BOTTOM_LEFT)
+    machine.set_active_wcs("G54")
+    machine.update_wcs_offset("G54", (0.0, 0.0, 0.0))
+    machine.update_wcs_offset("G55", (50.0, 20.0, 0.0))
+
+    step = contour_step_class.create(context, name="cut")
+    step.set_cut_speed(3000)
+    step.set_power(0.5)
+    geo = Geometry()
+    geo.move_to(0.0, 0.0)
+    geo.line_to(10.0, 0.0)
+    geo.line_to(10.0, 10.0)
+    geo.line_to(0.0, 10.0)
+    geo.close_path()
+    wp = WorkPiece(name="square")
+    wp._edited_boundaries = geo
+    wp.set_size(10.0, 10.0)
+    doc = _make_doc(step, wp)
+    source_layer = doc.active_layer
+    source_layer.set_wcs("G54")
+    target_layer = Layer("Target")
+    target_layer.set_wcs("G55")
+    doc.add_layer(target_layer)
+    cache = RaygeoPipeline()
+
+    first_nodes = IntentBuilder(machine=machine, generation_id=1).build(doc)
+    intent = create_intent_from_nodes(first_nodes)
+    first_completed = {}
+    run_intent(
+        intent,
+        on_completed=lambda node: first_completed.__setitem__(node.key, node),
+        pipeline=cache,
+    )
+
+    assert target_layer.workflow is not None
+    target_layer.workflow.add_child(step)
+    target_layer.add_child(wp)
+    second_nodes = IntentBuilder(machine=machine, generation_id=2).build(doc)
+    second_intent = create_intent_from_nodes(second_nodes)
+    intent.update(second_intent, pipeline=cache)
+    second_completed = {}
+    run_intent(
+        intent,
+        on_completed=lambda node: second_completed.__setitem__(node.key, node),
+        pipeline=cache,
+    )
+
+    first_job = next(n for n in first_nodes if n.key == job_key())
+    second_job = next(n for n in second_nodes if n.key == job_key())
+    assert first_job.version_token != second_job.version_token
+    first_gcode = first_completed[job_encode_key()].output.text
+    second_gcode = second_completed[job_encode_key()].output.text
+    first_start = _extract_cut_coords(first_gcode)[0]
+    second_start = _extract_cut_coords(second_gcode)[0]
+    assert second_start[0] == pytest.approx(first_start[0] - 50.0, abs=0.1)
+    assert second_start[1] == pytest.approx(first_start[1] - 20.0, abs=0.1)

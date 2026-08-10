@@ -215,7 +215,10 @@ should perform for that node. The builder produces:
 - `StageSpec.Compute` for every workpiece/step pair via
   `Step.build_compute_payload(machine_defaults, workpiece)`, which
   returns a `Part` (vector geometry or image source) plus a
-  `ComputePayload` (assembler spec). Per-workpiece transformers
+  `ComputePayload` (assembler spec and stable workpiece UID). Assemblers
+  use that UID on explicit `VectorOutline` and `RasterFill` section
+  markers, which gives path-interruption transforms and binary backends a
+  structural boundary that survives aggregation. Per-workpiece transformers
   (`OverscanTransformer`, `BidirScanOffsetTransformer`, ...) are
   resolved via `transformer_registry` into typed Rust `*Spec` pyclasses
   and attached to the payload so the Rust compute stage applies them
@@ -243,6 +246,36 @@ should perform for that node. The builder produces:
   crossing the GIL) and every other machine to a `PythonEncoder`
   wrapping the driver-specific encoder callable. The encoder reads
   machine-space ops from the upstream `job:machinexform` node.
+
+### Binary program backends
+
+`EncodedOutput` can carry an opaque `payload` in addition to its
+human-readable text and operation map. The Ruida backend uses this contract
+for a complete `.rd` program; transport framing is not stored in the pipeline
+artifact.
+
+For Ruida jobs, each resolved step is enclosed by `ProcessStart` and
+`ProcessEnd` markers. `ProcessStart` contains a version 1 process document
+with the process kind, speeds, power model, air assist, head identity, raster
+strategy, and source identity needed by a binary backend. These markers
+survive aggregation and the world-to-machine transform, so `RuidaEncoder`
+receives final machine-space `Ops` without depending on the document model.
+Raster angle and axis fields describe source-space planning intent; geometric
+transforms update the scan motion rather than rewriting process metadata. A
+binary backend therefore resolves its effective scan axis from the quantized
+machine-space motion while using the metadata to validate strategy and
+cross-hatch intent.
+
+`RuidaEncoder` lowers those operations into the neutral `JobPlan` API from
+`ruida-re`. The library validates the evidenced Ruida feature set and compiles
+the plan into a complete checksummed `.rd` payload. The USB serial and UDP
+program drivers decode that payload back into the lossless `ruida-re`
+`Program` representation before transfer. Unknown commands, noncanonical
+payloads, and unsupported process features fail before controller I/O.
+
+The program drivers deliberately do not expose Ruida device management or
+execution control. Successful return from `run()` means transfer completed;
+it does not mean the controller finished executing the job.
 
 ### Stock Resolution
 
@@ -283,7 +316,8 @@ on the main thread:
 | Job aggregate + encode  | `JobArtifact`       | `job`            |
 
 `JobArtifact` carries the world-space `Ops`, total distance, time
-estimate, the `EncodedOutput` (text plus op&rarr;machine-code map),
+estimate, the `EncodedOutput` (text, op&rarr;machine-code map, and optional
+opaque payload),
 and — when rotary modules are configured — kinematically-mapped ops
 for the 3D preview.
 
@@ -408,7 +442,7 @@ Generated when G-code is needed, consuming the `job` aggregate and the
 `job:encode` node:
 
 - Final machine code (G-code or driver-specific format) via
-  `EncodedOutput` (text + op&rarr;machine-code map)
+  `EncodedOutput` (text, op&rarr;machine-code map, and optional opaque payload)
 - World-space `Ops` for simulation and playback
 - High-fidelity time estimate and total distance
 - Rotary-mapped ops for 3D preview when rotary modules are configured

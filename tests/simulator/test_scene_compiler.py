@@ -6,8 +6,10 @@ from compile_scene_helper import (
     make_rotary_layer_config,
     make_test_config,
 )
+from raygeo.compressed_array import CompressedArray
 from raygeo.ops import Ops
 
+from rayforge.simulator.scene3d.compiled_scene import materialize_array
 from rayforge.simulator.scene3d.scene_compiler import compile_scene
 
 
@@ -25,6 +27,11 @@ def _single_layer_ops(step_ops, layer_uid="layer1"):
     return make_assembled_ops([(layer_uid, step_ops)])
 
 
+def _decompress(array):
+    assert isinstance(array, CompressedArray)
+    return materialize_array(array)
+
+
 class TestCompileLineTo:
     def test_single_powered_line(self):
         ops = Ops()
@@ -40,12 +47,12 @@ class TestCompileLineTo:
         assert len(artifact.vertex_layers) == 1
         vl = artifact.vertex_layers[0]
         assert not vl.is_rotary
-        pv = vl.powered_verts.reshape(-1, 3)
+        pv = _decompress(vl.powered_verts).reshape(-1, 3)
         assert pv.shape[0] == 2
         np.testing.assert_allclose(pv[0], [1.0, 2.0, 0.0])
         np.testing.assert_allclose(pv[1], [4.0, 6.0, 0.0])
 
-        pv_attr = vl.powered_attrib
+        pv_attr = _decompress(vl.powered_attrib)
         assert pv_attr.size == 8
 
     def test_travel_move(self):
@@ -61,13 +68,33 @@ class TestCompileLineTo:
         assert len(artifact.vertex_layers) == 1
         vl = artifact.vertex_layers[0]
         assert not vl.is_rotary
-        tv = vl.travel_verts.reshape(-1, 3)
+        tv = _decompress(vl.travel_verts).reshape(-1, 3)
         assert tv.shape[0] == 2
         np.testing.assert_allclose(tv[0], [1.0, 0.0, 0.01])
         np.testing.assert_allclose(tv[1], [5.0, 0.0, 0.01])
 
 
 class TestCompileScanline:
+    def test_nonempty_texture_and_overlay_remain_compressed(self):
+        ops = Ops()
+        for y, power in ((0.0, 128), (0.5, 255), (1.0, 64)):
+            ops.move_to(0.0, y, 0.0)
+            ops.scan_to(2.0, y, 0.0, bytes([power] * 100))
+
+        artifact = compile_scene(_single_layer_ops(ops), _flat_config())
+
+        assert len(artifact.texture_layers) == 1
+        texture = artifact.texture_layers[0]
+        power_texture = _decompress(texture.power_texture)
+        assert power_texture.shape == (50, 100)
+        assert power_texture.max() == 255
+        assert np.count_nonzero(power_texture) == 500
+
+        assert len(artifact.overlay_layers) == 1
+        overlay = artifact.overlay_layers[0]
+        assert _decompress(overlay.positions).shape == (18,)
+        assert _decompress(overlay.overlay_attrib).shape == (24,)
+
     def test_scanline_zero_power_segments(self):
         ops = Ops()
         ops.move_to(0.0, 0.0, 0.0)
@@ -80,13 +107,13 @@ class TestCompileScanline:
         artifact = compile_scene(assembled, config)
 
         vl = artifact.vertex_layers[0]
-        zpv = vl.zero_power_verts.reshape(-1, 3)
+        zpv = _decompress(vl.zero_power_verts).reshape(-1, 3)
         assert zpv.shape[0] == 4
 
         assert len(artifact.overlay_layers) == 1
         ol = artifact.overlay_layers[0]
         assert not ol.is_rotary
-        ov_pos = ol.positions.reshape(-1, 3)
+        ov_pos = _decompress(ol.positions).reshape(-1, 3)
         assert ov_pos.shape[0] == 2
 
     def test_scanline_overlay_power_values(self):
@@ -102,7 +129,7 @@ class TestCompileScanline:
 
         assert len(artifact.overlay_layers) == 1
         ol = artifact.overlay_layers[0]
-        ov_attr = ol.overlay_attrib
+        ov_attr = _decompress(ol.overlay_attrib)
         assert ov_attr.size == 8
         assert all(p > 0 for p in ov_attr[0::4])
 
@@ -123,7 +150,7 @@ class TestCompileRotary:
         assert len(artifact.vertex_layers) == 1
         vl = artifact.vertex_layers[0]
         assert vl.is_rotary
-        pv = vl.powered_verts.reshape(-1, 3)
+        pv = _decompress(vl.powered_verts).reshape(-1, 3)
         assert pv.shape[0] == 2
 
         assert abs(pv[0, 1]) < 1e-5
@@ -200,11 +227,11 @@ class TestCompileMultiLayer:
         assert len(artifact.vertex_layers) == 2
 
         flat_vl = next(vl for vl in artifact.vertex_layers if not vl.is_rotary)
-        pv_flat = flat_vl.powered_verts.reshape(-1, 3)
+        pv_flat = _decompress(flat_vl.powered_verts).reshape(-1, 3)
         assert pv_flat[0, 2] == 0.0
 
         rot_vl = next(vl for vl in artifact.vertex_layers if vl.is_rotary)
-        pv_rot = rot_vl.powered_verts.reshape(-1, 3)
+        pv_rot = _decompress(rot_vl.powered_verts).reshape(-1, 3)
         assert abs(pv_rot[0, 2] - 25.0) < 1e-3
 
 
@@ -290,8 +317,8 @@ class TestPoweredOffsets:
         artifact = compile_scene(assembled, config)
 
         vl = artifact.vertex_layers[0]
-        n_powered = vl.powered_verts.size // 3
-        n_travel = vl.travel_verts.size // 3
+        n_powered = _decompress(vl.powered_verts).size // 3
+        n_travel = _decompress(vl.travel_verts).size // 3
         assert vl.powered_cmd_offsets[-1] == n_powered
         assert vl.travel_cmd_offsets[-1] == n_travel
 
@@ -325,7 +352,7 @@ class TestOverlayOffsets:
         assert len(artifact.overlay_layers) == 1
         ol = artifact.overlay_layers[0]
 
-        ov_pos = ol.positions.reshape(-1, 3)
+        ov_pos = _decompress(ol.positions).reshape(-1, 3)
         assert ov_pos.shape[0] == 4
 
         off = ol.cmd_offsets
@@ -365,5 +392,5 @@ class TestOverlayOffsets:
         assert off[0] == 0
         assert off[-1] == 4
 
-        ov_pos = ol.positions.reshape(-1, 3)
+        ov_pos = _decompress(ol.positions).reshape(-1, 3)
         assert ov_pos.shape[0] == 4

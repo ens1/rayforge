@@ -4,6 +4,7 @@ from unittest.mock import patch
 
 import numpy as np
 import pytest
+from raygeo.compressed_array import CompressedArray
 
 from rayforge.simulator.scene3d import CompiledSceneArtifact, TextureLayer
 from rayforge.ui_gtk.sim3d.renderer.texture_renderer import (
@@ -38,9 +39,12 @@ def renderer():
         yield r
 
 
-def _make_texture_layer(laser_uid=""):
+def _make_texture_layer(laser_uid="", compressed=False):
+    power_texture = np.zeros((2, 2), dtype=np.uint8)
+    if compressed:
+        power_texture = CompressedArray.from_uint8_2d(power_texture)
     return TextureLayer(
-        power_texture=np.zeros((2, 2), dtype=np.uint8),
+        power_texture=power_texture,
         width_px=2,
         height_px=2,
         model_matrix=np.eye(4, dtype=np.float32),
@@ -110,3 +114,15 @@ def test_update_from_artifact_clears_and_uploads(renderer):
     assert len(renderer.instances) == 2
     assert renderer.instances[0]["laser_index"] == 0
     assert renderer.instances[1]["laser_index"] == 1
+
+
+@pytest.mark.ui
+def test_compressed_texture_is_materialized_at_upload(renderer):
+    layer = _make_texture_layer(compressed=True)
+
+    with patch.object(renderer, "add_instance") as add_instance:
+        renderer.add_instance_from_texture_layer(layer)
+
+    texture_data = add_instance.call_args.args[0]
+    assert isinstance(texture_data.power_texture_data, np.ndarray)
+    assert texture_data.power_texture_data.shape == (2, 2)

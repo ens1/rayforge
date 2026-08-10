@@ -34,6 +34,7 @@ class MaterialTestStep(LaserStep):
     CAPABILITIES: tuple[StepCapability, ...] = (MATERIAL_TEST,)
     REQUIRED_MACHINE_CAPS = frozenset({MachineCapability.LASER})
     ASSEMBLER_NAME = "material_test_grid"
+    PROCESS_KIND = "mixed"
     HIDDEN = True
 
     def __init__(self, name: str | None = None, typelabel: str | None = None):

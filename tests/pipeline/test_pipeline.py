@@ -1,10 +1,14 @@
 import asyncio
 import logging
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
 from raygeo.geo import Geometry
+from raygeo.ops import Ops
+from raygeo.ops.convert import EncodeOutput
+from raygeo.pipeline.completed import ErrorKind
 
 from rayforge.core.doc import Doc
 from rayforge.core.source_asset import SourceAsset
@@ -12,7 +16,7 @@ from rayforge.core.source_asset_segment import SourceAssetSegment
 from rayforge.core.vectorization_spec import PassthroughSpec
 from rayforge.core.workpiece import WorkPiece
 from rayforge.image import SVG_RENDERER
-from rayforge.pipeline.artifact import WorkPieceArtifactHandle
+from rayforge.pipeline.artifact import JobArtifact, WorkPieceArtifactHandle
 from rayforge.pipeline.pipeline import Pipeline
 
 logger = logging.getLogger(__name__)
@@ -106,6 +110,142 @@ class TestPipeline:
         assert callable(
             pipeline.generate_job_artifact.call_args.kwargs["when_done"]
         )
+
+    def test_job_output_preserves_payload_op_map_and_warnings(
+        self, doc, mock_task_mgr, context_initializer
+    ):
+        payload = b"\x00\x88\xff"
+        warnings = ["controller owns rapid speed"]
+        pipeline = Pipeline(
+            doc,
+            mock_task_mgr,
+            context_initializer.artifact_store,
+            context_initializer.machine,
+        )
+        pipeline._last_aggregate_output = SimpleNamespace(
+            ops=Ops(),
+            time_estimate=1.0,
+        )
+        encoded = EncodeOutput.MachineCode(
+            text="program",
+            op_to_machine_code=[(0, 2), (0, 0), (3, 1)],
+            machine_code_to_op=[0, 0, -1, 2],
+            payload=payload,
+            warnings=warnings,
+        )
+
+        pipeline._on_job_encoded(
+            None,
+            handle=encoded,
+            task_status=None,
+        )
+
+        handle = pipeline.last_completed_handle
+        assert handle is not None
+        with pipeline.artifact_store.checkout_handle(handle) as artifact:
+            assert isinstance(artifact, JobArtifact)
+            output = artifact.encoded_output
+            assert output is not None
+            assert output.payload == payload
+            assert output.driver_data["binary"] == payload
+            assert output.warnings == tuple(warnings)
+            assert output.op_map.op_to_machine_code == {
+                0: [0, 1],
+                1: [],
+                2: [3],
+            }
+            assert output.op_map.machine_code_to_op == {0: 0, 1: 0, 3: 2}
+
+    def test_pipeline_error_preserves_encoder_rejection(
+        self, doc, mock_task_mgr, context_initializer
+    ):
+        pipeline = Pipeline(
+            doc,
+            mock_task_mgr,
+            context_initializer.artifact_store,
+            context_initializer.machine,
+        )
+        received = MagicMock()
+        pipeline.pipeline_error.connect(received)
+
+        pipeline._on_pipeline_error(
+            None,
+            error_kind=ErrorKind.OTHER,
+            message="Ruida raster scan axis is unsupported",
+        )
+
+        received.assert_called_once_with(
+            pipeline,
+            message=("Pipeline error: Ruida raster scan axis is unsupported"),
+        )
+
+    @pytest.mark.parametrize(
+        ("task_status", "error"),
+        [
+            (
+                "failed",
+                "Ruida encoder rejected unsupported Z motion",
+            ),
+            ("cancelled", "Job generation was cancelled."),
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_generate_job_artifact_async_propagates_terminal_error(
+        self,
+        doc,
+        real_workpiece,
+        mock_task_mgr,
+        context_initializer,
+        contour_step_class,
+        task_status,
+        error,
+    ):
+        layer = self._setup_doc_with_workpiece(doc, real_workpiece)
+        assert layer.workflow is not None
+        layer.workflow.add_step(contour_step_class.create(context_initializer))
+        pipeline = Pipeline(
+            doc,
+            mock_task_mgr,
+            context_initializer.artifact_store,
+            context_initializer.machine,
+        )
+        pipeline._last_job_handle = None
+        pipeline._intent_ctl.force_rebuild = MagicMock()
+
+        generation = asyncio.create_task(
+            pipeline.generate_job_artifact_async()
+        )
+        await asyncio.sleep(0)
+        pipeline.job_generation_finished.send(
+            pipeline,
+            handle=None,
+            task_status=task_status,
+            error=error,
+        )
+
+        with pytest.raises(RuntimeError, match=error):
+            await asyncio.wait_for(generation, timeout=1)
+        pipeline._intent_ctl.force_rebuild.assert_called_once_with()
+
+    def test_wcs_update_schedules_rebuild_and_disconnects_on_shutdown(
+        self, doc, mock_task_mgr, context_initializer
+    ):
+        machine = context_initializer.machine
+        pipeline = Pipeline(
+            doc,
+            mock_task_mgr,
+            context_initializer.artifact_store,
+            machine,
+        )
+        schedule_rebuild = MagicMock()
+        pipeline._intent_ctl._schedule_rebuild = schedule_rebuild
+
+        machine.wcs_updated.send(machine)
+
+        schedule_rebuild.assert_called_once_with()
+        pipeline.shutdown()
+        machine.wcs_updated.send(machine)
+        schedule_rebuild.assert_called_once_with()
 
     def test_generate_job_artifact_no_machine(
         self, doc, mock_task_mgr, context_initializer

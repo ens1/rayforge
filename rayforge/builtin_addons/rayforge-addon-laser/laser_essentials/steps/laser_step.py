@@ -29,6 +29,8 @@ if TYPE_CHECKING:
 class LaserStep(Step):
     """Base for all laser-domain steps. Owns laser attributes."""
 
+    PROCESS_KIND = "vector"
+
     def __init__(self, typelabel, name=None):
         self.power: float = 1.0
         self.max_power: int = 1000
@@ -108,6 +110,26 @@ class LaserStep(Step):
     def populate_payload(self, payload, machine: "Machine"):
         super().populate_payload(payload, machine)
         payload.power = self.power
+        payload.air_assist = self.air_assist
+        payload.frequency = self.frequency
+        payload.pulse_width = self.pulse_width
+
+    def get_process_metadata(self, machine, layer=None) -> dict[str, Any]:
+        metadata = super().get_process_metadata(machine, layer)
+        metadata.update(
+            {
+                "power": {
+                    "mode": "static",
+                    "value": self.power,
+                    "min": self.power,
+                    "max": self.power,
+                },
+                "air_assist": self.air_assist,
+                "frequency_hz": self.frequency or None,
+                "pulse_width_us": self.pulse_width or None,
+            }
+        )
+        return metadata
 
     def get_settings(self) -> dict[str, Any]:
         """

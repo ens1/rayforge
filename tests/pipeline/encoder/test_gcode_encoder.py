@@ -53,6 +53,8 @@ def test_encode_resets_frequency_and_pulse_width():
     result = encoder.encode(ops, machine, doc)
 
     assert result.text is not None
+    assert isinstance(result.op_map.op_to_machine_code, dict)
+    assert isinstance(result.op_map.machine_code_to_op, dict)
     assert "M3" not in result.text
     assert "M4" not in result.text
 

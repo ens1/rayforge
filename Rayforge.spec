@@ -9,6 +9,7 @@ hiddenimports += collect_submodules('rayforge.ui_gtk.shared')
 hiddenimports += collect_submodules('rayforge.image')
 hiddenimports += collect_submodules('rayforge.core')
 hiddenimports.append('rayforge.ui_gtk.canvas2d.elements.workpiece')
+hiddenimports.append('ruida_re')
 
 # Use modern .icon (via Assets.car) when available, fall back to .icns.
 _use_car = os.path.exists('Assets.car')

@@ -18,6 +18,8 @@ def translate_assembly_warning(w) -> str:
         ``kind``, ``face_id``, ``region`` and ``detail``).
     :returns: A ``_()``-marked, formatted message.
     """
+    if isinstance(w, str):
+        return w
     label = w.face_id if w.face_id else _("default face")
     if w.kind == AssemblyWarningKind.FACE_FAILED:
         return _("Face '{face}' could not be machined: {detail}").format(

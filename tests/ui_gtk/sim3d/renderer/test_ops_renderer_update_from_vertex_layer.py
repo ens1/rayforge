@@ -4,6 +4,7 @@ from unittest.mock import patch
 
 import numpy as np
 import pytest
+from raygeo.compressed_array import CompressedArray
 
 from rayforge.simulator.scene3d import VertexLayer
 from rayforge.ui_gtk.sim3d.renderer.ops_renderer import OpsRenderer
@@ -76,3 +77,26 @@ def test_update_from_vertex_layer_fills_zero_power_alpha(renderer):
     zero_attrib = attrib[2 * 4 :]
     assert zero_attrib.size == 3 * 4
     assert np.all(zero_attrib[3::4] == 1.0)
+
+
+@pytest.mark.ui
+def test_update_from_compressed_vertex_layer(renderer):
+    vl = _make_vertex_layer()
+    powered_verts = vl.powered_verts
+    powered_attrib = vl.powered_attrib
+    travel_verts = vl.travel_verts
+    zero_power_verts = vl.zero_power_verts
+    assert isinstance(powered_verts, np.ndarray)
+    assert isinstance(powered_attrib, np.ndarray)
+    assert isinstance(travel_verts, np.ndarray)
+    assert isinstance(zero_power_verts, np.ndarray)
+    vl.powered_verts = CompressedArray.from_float32(powered_verts)
+    vl.powered_attrib = CompressedArray.from_float32(powered_attrib.ravel())
+    vl.travel_verts = CompressedArray.from_float32(travel_verts)
+    vl.zero_power_verts = CompressedArray.from_float32(zero_power_verts)
+
+    with patch.object(renderer, "_load_buffer_data"):
+        renderer.update_from_vertex_layer(vl, show_travel_moves=True)
+
+    assert renderer.powered_vertex_count == 5
+    assert renderer.travel_vertex_count == 4

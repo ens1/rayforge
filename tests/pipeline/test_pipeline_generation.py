@@ -3,15 +3,19 @@ import logging
 from pathlib import Path
 
 import pytest
-from raygeo.geo import Geometry
+from raygeo.geo import Geometry, Matrix
+from raygeo.ops.types import CommandType
 
 from rayforge.core.doc import Doc
 from rayforge.core.source_asset import SourceAsset
 from rayforge.core.source_asset_segment import SourceAssetSegment
+from rayforge.core.tab import Tab
 from rayforge.core.vectorization_spec import PassthroughSpec
 from rayforge.core.workpiece import WorkPiece
 from rayforge.image import SVG_RENDERER
+from rayforge.machine.driver.ruida import RuidaUdpProgramDriver
 from rayforge.pipeline.artifact import JobArtifact
+from rayforge.pipeline.intent_builder import IntentBuilder, workpiece_key
 from rayforge.pipeline.pipeline import Pipeline
 
 logger = logging.getLogger(__name__)
@@ -255,6 +259,75 @@ class TestPipelineGeneration:
         assert handle is not None
 
         await asyncio.to_thread(task_mgr.wait_until_settled, 5000)
+
+    @pytest.mark.asyncio
+    async def test_ruida_reduced_power_tab_is_visible_encode_failure(
+        self,
+        doc,
+        real_workpiece,
+        task_mgr,
+        context_initializer,
+        contour_step_class,
+    ):
+        layer = self._setup_doc_with_workpiece(doc, real_workpiece)
+        assert layer.workflow is not None
+        step = contour_step_class.create(context_initializer)
+        step.set_power(0.8)
+        step.set_tab_power(0.25)
+        layer.workflow.add_step(step)
+        geometry = Geometry()
+        geometry.move_to(0, 0)
+        geometry.line_to(1, 0)
+        geometry.line_to(1, 1)
+        geometry.line_to(0, 1)
+        geometry.close_path()
+        assert real_workpiece.source_segment is not None
+        real_workpiece.source_segment.pristine_geometry = geometry
+        real_workpiece.source_segment.normalization_matrix = Matrix.identity()
+        real_workpiece.tabs = [Tab(width=5.0, segment_index=1, pos=0.5)]
+        machine = context_initializer.machine
+        machine.driver_name = RuidaUdpProgramDriver.__name__
+        machine.dialect_uid = None
+        nodes = IntentBuilder(machine=machine).build(doc)
+        wp_node = next(
+            node
+            for node in nodes
+            if node.key == workpiece_key(real_workpiece.uid, step.uid)
+        )
+        tab_spec = next(
+            spec
+            for spec in wp_node.stage.params.transformers
+            if type(spec).__name__ == "TabsSpec"
+        )
+        assert list(tab_spec.clips) == [(25.0, 0.0, 5.0)]
+        pipeline = Pipeline(
+            doc,
+            task_mgr,
+            context_initializer.artifact_store,
+            machine,
+        )
+        errors = []
+        pipeline.pipeline_error.connect(
+            lambda sender, **kwargs: errors.append(kwargs["message"]),
+            weak=False,
+        )
+
+        with pytest.raises(RuntimeError, match="Ops power disagree"):
+            await asyncio.wait_for(
+                pipeline.generate_job_artifact_async(), timeout=10
+            )
+        await asyncio.to_thread(task_mgr.wait_until_settled, 5000)
+
+        aggregate = pipeline._last_aggregate_output
+        assert aggregate is not None
+        powers = [
+            aggregate.ops.power(index)
+            for index in range(aggregate.ops.len())
+            if aggregate.ops.command_type(index) == CommandType.SET_POWER
+        ]
+        assert any(value == pytest.approx(0.2) for value in powers)
+        assert any(value == pytest.approx(0.8) for value in powers)
+        assert any("Ops power disagree" in message for message in errors)
 
     @pytest.mark.asyncio
     async def test_generate_job_artifact_async_already_running(

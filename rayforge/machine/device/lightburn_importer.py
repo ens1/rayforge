@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 _DRIVER_MAP: dict[str, str | None] = {
     "Serial": "GrblSerialDriver",
     "Network": "GrblNetworkDriver",
-    "Ruida": "RuidaDriver",
+    "Ruida": "RuidaUdpProgramDriver",
     "EZCAD": None,
     "LaserCAD": None,
     "LightBurn": None,

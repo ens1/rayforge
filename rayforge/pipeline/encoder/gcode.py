@@ -25,8 +25,9 @@ class GcodeEncoder(OpsEncoder):
         result = ops.to_gcode(dialect_spec, context)
         return EncodedOutput(
             text=result["text"],
-            op_map=MachineCodeOpMap(
-                op_to_machine_code=result["op_to_machine_code"],
-                machine_code_to_op=result["machine_code_to_op"],
+            op_map=MachineCodeOpMap.from_raygeo(
+                result["op_to_machine_code"],
+                result["machine_code_to_op"],
             ),
+            warnings=tuple(result.get("warnings") or ()),
         )
