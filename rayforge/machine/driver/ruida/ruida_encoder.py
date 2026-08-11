@@ -1682,6 +1682,8 @@ class RuidaOpsAdapter:
             end,
             raster_mode,
         )
+        if raster_mode == "CONSTANT_POWER":
+            self._validate_constant_scan_samples(process, samples)
         if raster_processing == "planned-path":
             self._validate_planned_scan_samples(process, samples)
         if not any(samples):
@@ -1692,6 +1694,7 @@ class RuidaOpsAdapter:
             "raster",
             raster_axis,
             raster_processing=raster_processing,
+            static_raster=raster_mode == "CONSTANT_POWER",
         )
         self._attach_pending_travels(builder, start)
         if raster_processing == "native":
@@ -1704,7 +1707,10 @@ class RuidaOpsAdapter:
             y = start[1] + dy * fraction
             percent = sample * 100 / 255
             if sample:
-                if raster_processing == "native":
+                if (
+                    raster_processing == "native"
+                    and raster_mode == "VARIABLE_POWER"
+                ):
                     builder.append_event(
                         self.api.SetModulation(percent),
                         None,
@@ -1713,7 +1719,8 @@ class RuidaOpsAdapter:
                     self.api.MarkTo(x, y),
                     self._planned_section_id(builder),
                 )
-                builder.raster_powers.append(percent)
+                if raster_mode == "VARIABLE_POWER":
+                    builder.raster_powers.append(percent)
             else:
                 builder.append_event(
                     self.api.TravelTo(x, y),
@@ -1766,6 +1773,31 @@ class RuidaOpsAdapter:
                 raise RuidaEncodingError(
                     "Diagonal variable/grayscale raster modulation is not "
                     "supported by the evidenced Ruida profile"
+                )
+
+    def _validate_constant_scan_samples(
+        self,
+        process: _ProcessMetadata,
+        samples: bytes,
+    ) -> None:
+        expected = (
+            self.state.power if process.kind == "mixed" else process.power
+        )
+        if expected is None:
+            raise RuidaEncodingError(
+                "Constant-power raster requires explicit process power"
+            )
+        for sample in samples:
+            if sample == 0:
+                continue
+            if not math.isclose(
+                sample / 255,
+                expected,
+                rel_tol=0,
+                abs_tol=_U8_POWER_TOLERANCE,
+            ):
+                raise RuidaEncodingError(
+                    "Constant-power raster samples must match layer power"
                 )
 
     def _resolve_raster_axis(

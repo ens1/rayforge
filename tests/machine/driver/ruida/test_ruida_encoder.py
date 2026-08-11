@@ -2,6 +2,7 @@
 
 import json
 from dataclasses import replace
+from itertools import pairwise
 from typing import Any
 
 import cairo
@@ -67,6 +68,18 @@ def _opaque_black_surface(_workpiece, width, height):
     context = cairo.Context(surface)
     context.set_source_rgba(0, 0, 0, 1)
     context.paint()
+    return surface
+
+
+def _black_gap_black_surface(_workpiece, width, height):
+    surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, width, height)
+    context = cairo.Context(surface)
+    context.set_source_rgba(1, 1, 1, 1)
+    context.paint()
+    context.set_source_rgba(0, 0, 0, 1)
+    context.rectangle(0, 0, width // 3, height)
+    context.rectangle(2 * width // 3, 0, width - 2 * width // 3, height)
+    context.fill()
     return surface
 
 
@@ -227,6 +240,30 @@ def _records(payload):
 
 def _values(records, name):
     return [record.values for record in records if record.name == name]
+
+
+def _decoded_motion(records):
+    x = None
+    y = None
+    result = []
+    for record in records:
+        if record.name in {"move_absolute", "cut_absolute"}:
+            x = record.values["x_mm"]
+            y = record.values["y_mm"]
+        elif record.name in {"move_relative", "cut_relative"}:
+            assert x is not None and y is not None
+            x = round(x + record.values["dx_mm"], 3)
+            y = round(y + record.values["dy_mm"], 3)
+        elif record.name in {"move_horizontal", "cut_horizontal"}:
+            assert x is not None and y is not None
+            x = round(x + record.values["dx_mm"], 3)
+        elif record.name in {"move_vertical", "cut_vertical"}:
+            assert x is not None and y is not None
+            y = round(y + record.values["dy_mm"], 3)
+        else:
+            continue
+        result.append((record.name, x, y))
+    return result
 
 
 def _configure_inactive_power(machine, index, minimum, maximum):
@@ -546,6 +583,119 @@ def test_engrave_pipeline_respects_dynamic_power_contract(
     assert result.payload is not None
     program = RuidaCodec().decode(result.payload, container="rd")
     assert program.issues == []
+
+
+def test_engrave_pipeline_chunks_long_native_raster_marks(
+    engrave_step_class,
+    test_machine_and_config,
+    mocker,
+):
+    machine, context = test_machine_and_config
+    machine.hydrate()
+    step = engrave_step_class.create(context, name="Long Ruida engrave")
+    step.power = 0.2
+    step.depth_mode = "CONSTANT_POWER"
+    step.auto_levels = False
+    step.sample_interval_mm = 1.0
+    step.line_interval_mm = 1.0
+    step.dot_width_correction_mm = 0.0
+    step.scan_mode = "FULL_SWEEP"
+    mocker.patch.object(
+        WorkPiece,
+        "render_to_pixels",
+        autospec=True,
+        side_effect=_black_gap_black_surface,
+    )
+    workpiece = WorkPiece(name="long striped image")
+    workpiece.set_size(60, 2)
+    workpiece.pos = (20, 20)
+    doc = Doc()
+    workflow = doc.active_layer.workflow
+    assert workflow is not None
+    workflow.add_child(step)
+    doc.active_layer.add_child(workpiece)
+
+    completed = {}
+    execute_stages(
+        IntentBuilder(machine=machine, generation_id=1).build(doc),
+        lambda node: completed.__setitem__(node.key, node),
+    )
+    machine_node = completed[job_machinexform_key()]
+    assert machine_node.error is None, machine_node.error
+    ops = machine_node.output.ops
+    plan = RuidaOpsAdapter(machine).build_plan(ops)
+
+    assert len(plan.layers) == 1
+    layer = plan.layers[0]
+    assert layer.kind == "raster"
+    assert layer.raster_processing == "native"
+    assert layer.scan_axis == "horizontal"
+    assert layer.min_power_percent == pytest.approx(20)
+    assert layer.max_power_percent == pytest.approx(20)
+    assert not any(isinstance(event, SetModulation) for event in layer.events)
+    positional = [
+        event
+        for event in layer.events
+        if isinstance(event, (TravelTo, MarkTo))
+    ]
+    position = None
+    mark_distances_um = []
+    for event in positional:
+        target = (event.x_mm, event.y_mm)
+        if isinstance(event, MarkTo) and position is not None:
+            mark_distances_um.append(
+                abs(round((target[0] - position[0]) * 1000))
+            )
+        position = target
+    assert max(mark_distances_um) > 8192
+    assert any(
+        isinstance(event, TravelTo)
+        and previous is not None
+        and event.y_mm == pytest.approx(previous.y_mm)
+        and abs(event.x_mm - previous.x_mm) > 8.192
+        for previous, event in pairwise(positional)
+    )
+
+    result = RuidaEncoder().encode(ops, machine, doc)
+    assert result.payload is not None
+    records = _records(result.payload)
+    cuts = [record for record in records if record.name.startswith("cut_")]
+    assert cuts
+    assert _values(records, "immediate_power_1") == []
+    assert _values(records, "immediate_power_3") == []
+    assert {record.name for record in cuts} == {"cut_horizontal"}
+    assert {record.opcode for record in cuts} == {"aa"}
+    assert all(abs(record.values["dx_mm"]) <= 4.0 for record in cuts)
+    assert len(cuts) == sum(
+        (distance + 3999) // 4000 for distance in mark_distances_um
+    )
+
+    decoded = _decoded_motion(records)
+    expected_points = [
+        (round(event.x_mm, 3), round(event.y_mm, 3)) for event in positional
+    ]
+    decoded_points = [(x, y) for _name, x, y in decoded]
+    assert decoded_points[-1] == expected_points[-1]
+    assert (
+        min(x for x, _y in decoded_points),
+        min(y for _x, y in decoded_points),
+        max(x for x, _y in decoded_points),
+        max(y for _x, y in decoded_points),
+    ) == (
+        min(x for x, _y in expected_points),
+        min(y for _x, y in expected_points),
+        max(x for x, _y in expected_points),
+        max(y for _x, y in expected_points),
+    )
+    decoded_travel_targets = {
+        (x, y) for name, x, y in decoded if name.startswith("move_")
+    }
+    expected_travel_targets = {
+        (round(event.x_mm, 3), round(event.y_mm, 3))
+        for event in positional
+        if isinstance(event, TravelTo)
+    }
+    assert expected_travel_targets <= decoded_travel_targets
 
 
 def test_rotated_engrave_resolves_machine_axis_and_round_trips_rd(
@@ -1381,6 +1531,75 @@ def test_raster_samples_compile_as_constant_power_spans(machine):
         MarkTo(25, 20),
         TravelTo(26, 20),
     )
+
+
+def test_constant_power_raster_uses_layer_power_without_modulation(
+    machine,
+    doc,
+):
+    metadata = _metadata(
+        kind="raster",
+        power=51 / 255,
+        raster_mode="CONSTANT_POWER",
+        depth_mode="mask_scan",
+    )
+    ops = Ops()
+    _process_start(ops, metadata)
+    _state(ops, metadata)
+    ops.ops_section_start(
+        SectionType.RASTER_FILL,
+        "workpiece-1",
+        raster_mode=RasterMode.CONSTANT_POWER,
+    )
+    ops.move_to(20, 20)
+    ops.scan_to(
+        60,
+        20,
+        power_values=bytearray([51, 51, 0, 0, 51, 51]),
+    )
+    ops.ops_section_end(
+        SectionType.RASTER_FILL,
+        raster_mode=RasterMode.CONSTANT_POWER,
+    )
+    _process_end(ops, metadata)
+
+    layer = RuidaOpsAdapter(machine).build_plan(ops).layers[0]
+
+    assert layer.min_power_percent == pytest.approx(20)
+    assert layer.max_power_percent == pytest.approx(20)
+    assert [type(event) for event in layer.events] == [
+        TravelTo,
+        MarkTo,
+        TravelTo,
+        MarkTo,
+    ]
+    assert [event.x_mm for event in layer.events] == pytest.approx(
+        [20, 20 + 80 / 6, 20 + 160 / 6, 60]
+    )
+    assert [event.y_mm for event in layer.events] == pytest.approx([20] * 4)
+    records = _records(RuidaEncoder().encode(ops, machine, doc).payload)
+    assert _values(records, "immediate_power_1") == []
+    assert _values(records, "immediate_power_3") == []
+
+
+def test_constant_power_raster_rejects_mismatched_samples(machine):
+    metadata = _metadata(
+        kind="mixed",
+        power=51 / 255,
+    )
+    ops = Ops()
+    _process_start(ops, metadata)
+    _state(ops, metadata)
+    ops.ops_section_start(
+        SectionType.RASTER_FILL,
+        "workpiece-1",
+        raster_mode=RasterMode.CONSTANT_POWER,
+    )
+    ops.move_to(20, 20)
+    ops.scan_to(30, 20, power_values=bytearray([52]))
+
+    with pytest.raises(RuidaEncodingError, match="must match layer power"):
+        RuidaOpsAdapter(machine).build_plan(ops)
 
 
 def test_unlinearized_curves_are_rejected(machine):
