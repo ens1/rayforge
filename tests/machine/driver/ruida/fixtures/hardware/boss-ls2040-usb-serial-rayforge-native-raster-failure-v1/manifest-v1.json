@@ -1,0 +1,174 @@
+{
+  "schema": "ruida-re.hardware-native-raster-negative-evidence.v1",
+  "identifier": "boss-ls2040-usb-serial-rayforge-native-raster-failure-v1",
+  "observed_on": "2026-08-11",
+  "generating_revisions": {
+    "rayforge": "5ee81a8c73cacbf6dc468de74ebb9f33ecfec5f4",
+    "raygeo": "5663bec8c5d47ebb7f3f09d6df0658f5bdac8583",
+    "ruida_re": "4af8e1cf0be2b4a12c6ffb0fc0d05ecccba4ac0f"
+  },
+  "scope": {
+    "description": "One supervised mixed vector/native-raster acceptance job produced the expected visible vector row, followed by observed raster motion with no visible raster mark.",
+    "limitations": [
+      "The host transfer summary proves one packet with zero retries, not controller receipt or execution completion.",
+      "The observation was visual and had no optical, electrical, dimensional, or motion sensor instrumentation.",
+      "The operator explicitly corrected the initial 30 cm estimate to 30 mm/3 cm; neither estimate is dimensional metrology.",
+      "The combined job does not isolate absolute raster cuts, modulation and layer-range interaction, bidirectional mode, or the physical firing threshold as a single cause.",
+      "The result is scoped to this exact artifact and does not contradict the vector path or establish failure of every native-raster job, Ruida controller, or job profile."
+    ]
+  },
+  "environment": {
+    "host_platform": "macOS",
+    "machine": "Boss LS2040",
+    "configured_controller_profile": "Ruida 644XS",
+    "transport": {
+      "kind": "USB serial",
+      "baud": 115200,
+      "controller_acknowledgement_available": false,
+      "execution_acknowledgement_available": false
+    },
+    "material": {
+      "description": "cardboard",
+      "dimensions_mm": [
+        152.4,
+        762.0
+      ],
+      "reported_origin_mm": {
+        "x": 0.0,
+        "y": 0.0
+      }
+    },
+    "physical_source_inhibited": false
+  },
+  "process": {
+    "profile": "proven",
+    "speed_mm_s": 100.0,
+    "maximum_requested_power_percent": 15.0,
+    "air_assist_requested": false,
+    "controller_bounds_mm": {
+      "min_x": 30.0,
+      "min_y": 6.0,
+      "max_x": 120.0,
+      "max_y": 12.05
+    },
+    "layers": [
+      {
+        "index": 0,
+        "kind": "vector",
+        "layer_mode": 0,
+        "layer_operation": 0,
+        "encoded_power_percent": 14.997253250320455,
+        "laser_enable_mask": 1,
+        "mark_command": "cut_absolute",
+        "mark_lengths_mm": [
+          26.0,
+          22.0,
+          26.0
+        ],
+        "semantic_travel_gaps_mm": [
+          8.0,
+          8.0
+        ]
+      },
+      {
+        "index": 1,
+        "kind": "raster",
+        "raster_processing": "native",
+        "scan_axis": "horizontal",
+        "raster_strategy": "bidirectional",
+        "layer_mode": 2,
+        "layer_operation": 1,
+        "encoded_min_power_percent": 1.959348104742721,
+        "encoded_max_power_percent": 14.997253250320455,
+        "laser_enable_mask": 1,
+        "high_modulation": {
+          "power_percent": 14.899591039492156,
+          "immediate_power_1_raw": "c71309",
+          "immediate_power_3_raw": "c21309",
+          "pairs": 6,
+          "following_mark_command": "cut_absolute",
+          "following_mark_lengths_mm": [
+            24.0,
+            17.0,
+            23.0,
+            23.0,
+            17.0,
+            24.0
+          ]
+        },
+        "low_modulation_edges": {
+          "power_percent": 1.959348104742721,
+          "immediate_power_1_raw": "c70241",
+          "immediate_power_3_raw": "c20241",
+          "pairs": 8,
+          "following_mark_command": "cut_horizontal",
+          "following_mark_lengths_mm": [
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ]
+        }
+      }
+    ]
+  },
+  "artifact": {
+    "file": "boss-ls2040-proven-vector-native-raster-bottom-strip-offline-v1.rd.quarantined",
+    "original_capture_filename": "boss-ls2040-proven-vector-native-raster-bottom-strip-offline-v1.rd",
+    "sha256": "ee1ae328fd431b75f43f0bf61feaf1e08e4ef511fb0c3615d95b0d38aab5e3b4",
+    "size_bytes": 917,
+    "checksum": 46712,
+    "records": 147,
+    "known_records": 147,
+    "opaque_records": 0,
+    "issues": [],
+    "exact_preserve_roundtrip": true,
+    "exact_recompute_roundtrip": true,
+    "quarantine": "negative-evidence-do-not-resend"
+  },
+  "transmission": {
+    "explicit_operator_approval": true,
+    "artifact_sha256": "ee1ae328fd431b75f43f0bf61feaf1e08e4ef511fb0c3615d95b0d38aab5e3b4",
+    "host_log": {
+      "scope": "host-side driver transfer summary",
+      "packets": 1,
+      "payload_bytes": 917,
+      "retries": 0,
+      "controller_acknowledgement": false,
+      "execution_acknowledgement": false
+    }
+  },
+  "operator_observation": {
+    "reported_verbatim": [
+      "I see the first row, not the second row. I saw the second row movement, but the laser didn't fire",
+      "Only one row is showing, 3 lines about 30cm",
+      "yes, 30mm/3cm"
+    ],
+    "dimension_interpretation": "The 30 cm estimate was explicitly corrected to 30 mm/3 cm and remains an approximate visual description only.",
+    "instrumented_metrology": false
+  },
+  "result": {
+    "status": "scoped-native-raster-negative-evidence",
+    "vector_row": {
+      "status": "pass",
+      "scope": "three visible separated marks in the first row"
+    },
+    "native_raster": {
+      "status": "fail",
+      "scope": "raster motion was observed but no visible raster mark was reported"
+    },
+    "causal_mechanism": "not-isolated",
+    "candidate_factors_not_proven": [
+      "cut_absolute in a native-raster envelope",
+      "immediate modulation and layer power-range interaction",
+      "horizontal bidirectional mode compatibility",
+      "physical firing threshold at the encoded settings"
+    ],
+    "artifact_disposition": "quarantined-do-not-resend",
+    "broad_profile_conclusion": "not-established"
+  }
+}
