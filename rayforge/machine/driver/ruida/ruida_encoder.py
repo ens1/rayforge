@@ -31,6 +31,8 @@ if TYPE_CHECKING:
 _POSITION_TOLERANCE = 1e-9
 _WIRE_COORDINATE_SCALE = 1000
 _U8_POWER_TOLERANCE = 0.5 / 255 + 1e-12
+_RUIDA_POWER_WIRE_SCALE = (1 << 14) - 1
+_RUIDA_OBSERVED_MARK_POWER_RAW_MINIMUM = 16
 _PROCESS_SCHEMA = "rayforge.process"
 _PROCESS_VERSION = 1
 _UNSET_INACTIVE_POWER = -1.0
@@ -775,6 +777,10 @@ def _wire_xy(
     )
 
 
+def _ruida_power_wire_value(percent: float) -> int:
+    return int(percent * _RUIDA_POWER_WIRE_SCALE / 100 + 0.5)
+
+
 def _same_wire_position(
     start: tuple[float, float, float],
     end: tuple[float, float, float],
@@ -1058,7 +1064,16 @@ class _LayerBuilder:
             raise RuidaEncodingError(
                 "Raster minimum power cannot exceed maximum power"
             )
-        return minimum * 100, maximum * 100
+        minimum_percent = minimum * 100
+        if (
+            self.key.raster_processing == "native"
+            and self.process.raster_mode == "VARIABLE_POWER"
+            and _ruida_power_wire_value(minimum_percent)
+            < _RUIDA_OBSERVED_MARK_POWER_RAW_MINIMUM
+            and self.raster_powers
+        ):
+            minimum_percent = min(self.raster_powers)
+        return minimum_percent, maximum * 100
 
     def _raster_axis(self) -> str:
         if len(self.raster_axes) != 1:
@@ -1443,6 +1458,19 @@ class RuidaOpsAdapter:
             self.pending_travels.append(self.api.TravelTo(end[0], end[1]))
             self.current_pos = end
             return
+        effective_power = None if process.kind == "mixed" else process.power
+        if "power" in self.process_state_fields:
+            effective_power = self.state.power
+        if (
+            process.power_mode == "static"
+            and effective_power is not None
+            and effective_power <= 0
+        ):
+            raise RuidaEncodingError(
+                "Ruida static marking motion requires power greater than "
+                "zero; set positive process power or use MoveTo for "
+                "non-marking motion"
+            )
         raster_processing = None
         raster_axis = None
         if kind == "raster":

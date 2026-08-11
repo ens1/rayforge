@@ -489,13 +489,14 @@ profile is based on LightBurn 2.1.03 output for a Ruida 644XS controller.
 
 :::warning
 The advanced profiles described below remain evidence-limited and intended
-for research. Narrow `planned-path-research` coupons have limited hardware
-motion and marking observations. Two `dynamic-power-research` coupons exposed
-a missing baseline restoration in the executed payloads. One corrected exact
-restore subset is now operator-observed, but the broad profile remains
-research-only and every other dynamic-power combination is unvalidated. Every
-other accepted planned-path combination and all remaining research profiles
-have offline producer-fixture evidence only.
+for research. Narrow `planned-path-research` coupons now have single-section
+and two-section cross-hatch observations. Two `dynamic-power-research` coupons
+exposed a missing baseline restoration in the executed payloads; exact single-
+and repeated-restore sequences are now operator-observed. Neither result
+promotes the broad profiles. A nominal-0% marking control unexpectedly emitted
+on the tested Boss LS2040, so zero encoded power must not be treated as a
+laser-off control. Dwell, Z, and the other advanced profiles remain
+hardware-unobserved.
 Keep the `proven` profile selected unless you are intentionally evaluating one
 narrow research capability.
 :::
@@ -549,11 +550,11 @@ that scope. The profiles cannot be combined.
 | :------ | :-------------------- |
 | `planned-path-research` | One planned-path raster layer using constant binary power for diagonal or cross-hatch scans. Variable-power, grayscale, and depth-map diagonal scans remain unsupported. |
 | `dual-laser-research` | One vector layer using either controller channel 1 or channel 2. The inactive channel's stored powers must be entered and explicitly confirmed. Simultaneous channel mask 3 is not supported. |
-| `stationary-research` | One vector layer containing Dwell events greater than 0 and no longer than 200 ms. Rayforge currently produces these only through manual Ops or frame corner pauses. This is not stationary marking Pulse. |
+| `stationary-research` | One vector layer containing Dwell events greater than 0 and no longer than 200 ms. Rayforge currently produces these only through manual Ops or frame corner pauses. This is not stationary marking Pulse. C6 11 dwell remains hardware-unobserved, and static 0% marking is rejected. |
 | `rf-research` | One vector layer with RF frequency from 10,000 through 20,000 Hz. |
 | `fiber-research` | One vector layer on a fiber head with pulse width from 0 through 0.2 µs, encoded as 0 through 200 ns. |
-| `z-research` | One native raster layer with a nonzero typed logical layer Z offset no greater than 1 mm in either direction. The compiler emits a balanced relative envelope and still requires all motion endpoints at Z=0. |
-| `dynamic-power-research` | One vector layer with Rayforge head-1 intent whose tab transform produces reduced positive marking power. A normal mark after a reduced span requires an explicit baseline-power restoration from a restoration-capable compiler. One exact restore subset is operator-observed; the broad profile remains research-only and other combinations are unvalidated. It does not provide general speed-dependent or raster dynamic power. |
+| `z-research` | One native raster layer with a nonzero typed logical layer Z offset no greater than 1 mm in either direction. The compiler emits a balanced relative envelope and still requires all motion endpoints at Z=0. The prepared Z coupons were withheld and remain hardware-unobserved. |
+| `dynamic-power-research` | One vector layer with Rayforge head-1 intent whose tab transform produces reduced positive marking power. A normal mark after a reduced span requires an explicit baseline-power restoration from a restoration-capable compiler. Exact one-restore and two-restore subsets are operator-observed; the broad profile remains research-only and other combinations are unvalidated. It does not provide general speed-dependent or raster dynamic power. |
 
 The planned-path observations used the same operator-identified Boss LS2040
 and USB serial transport. A direct 10% coupon produced the expected five
@@ -571,16 +572,26 @@ The transport provided no controller or execution acknowledgement; the
 operator observed five lines, more widely spaced and in the opposite diagonal
 direction from the direct reference job.
 
-The planned-path observation does not validate dimensional, angle, or power
-metrology. It also does not validate cross-hatch or additional sections, other
-planned paths, additional layers, variable-power, grayscale, or depth-map
-diagonal scans, other power or speed settings, laser-channel routing or
-additional heads, UDP transfer, or controller status monitoring. The physical
-air-assist state was not independently observed.
+The separate cross-hatch artifact contained two `RasterSection` blocks, five
+marks in each diagonal direction, and one section-separator operation. At 15%
+requested power and 100 mm/s, the operator reported, "Crosshatch is good. Both
+directions are visible, no connection burns, and no burns. I can see the one
+small edge, the beam obviously pulsed at the top left of the crosshatch." The
+small edge decodes as a final 0.3507 mm `cut_relative` marking command. The
+payload has no C6 10 record, so this observation is not evidence for pulse
+control. Its host summary reported one packet and zero retries, with no
+controller or execution acknowledgement.
+
+These planned-path observations do not provide dimensional, angle, or power
+metrology. They also do not validate other planned paths, additional layers,
+variable-power, grayscale, or depth-map diagonal scans, other power or speed
+settings, laser-channel routing or additional heads, UDP transfer, or
+controller status monitoring. The physical air-assist state was not
+independently observed.
 
 ##### Dynamic-vector power observations
 
-Three Rayforge-generated, one-layer vector coupons with Rayforge head-1 intent
+Four Rayforge-generated, one-layer vector coupons with Rayforge head-1 intent
 were transferred to the same Boss LS2040 over USB serial at 100 mm/s. The first
 contained planned spans of 12 mm at 15%, 6 mm at 10%, and 12 mm at 15%. The
 operator reported,
@@ -609,13 +620,47 @@ operator-observed evidence for that exact restore subset on one machine. The
 approximate visual report is not dimensional metrology and does not establish
 calibrated power or zero optical output in the gap.
 
-All three host-side transfer summaries reported one packet and zero retries.
+The fourth coupon contained five planned 16 mm spans at
+15%-5%-15%-5%-15%, with reduce-restore-reduce-restore envelopes immediately
+before the last four spans. The operator reported, "Yes, I see 3 lines, maybe
+20mm each, two gaps." The reported lengths are approximate visual descriptions,
+not metrology; the decoded spans are 16 mm. This is scoped evidence for the
+exact repeated-restore sequence, not arbitrary repeated dynamic behavior.
+
+All four host-side transfer summaries reported one packet and zero retries.
 They provided no controller acknowledgement or execution-completion status.
 The observations provide no dimensional, timing, optical-power, electrical,
 or laser-channel-routing metrology. The broad dynamic-power profile remains
 research-only and is not eligible for default promotion. Other powers, speeds,
-geometry, multiple reduced spans, additional heads, controllers, transports,
-or combinations with another research capability remain unvalidated.
+geometry, repeated patterns, additional heads, controllers, transports, or
+combinations with another research capability remain unvalidated.
+
+##### Zero-power safety observation
+
+Before a C6 11 dwell test, a paired no-dwell control was generated with zero
+layer and active power for laser 1, an enabled laser-1 mask, and four ordinary
+cut motions around decoded 45 by 17 mm bounds. The operator reported, "There
+was laser emission. I see a clearly drawn rectangle, maybe 25mmx50mm." The
+operator dimensions are approximate and orientation-dependent, but visible
+emission directly contradicts treating raw zero power as a laser-off safety
+control on this machine.
+
+The exact cause was not isolated. Raw zero could mean default, stale, or no
+update; the controller or power supply could impose a firing floor; and other
+fields, including the minimal through-power records, may contribute. None of
+those explanations is established. The paired dwell artifact differs only by
+four 200 ms C6 11 records and its checksum. It was stopped before transfer,
+published only with an `.rd.quarantined` suffix, and remains do-not-send. The Z
+coupons were also withheld. Consequently C6 11 dwell and nonzero logical Z
+behavior remain hardware-unobserved.
+
+Rayforge rejects static zero-power marking motion. Its `ruida-re` compiler also
+rejects every enabled marking-channel minimum and maximum, and raster marking
+modulation, that would encode below raw value 16. This is a conservative
+generation-time evidence floor, not a guarantee that raw 16 or any low power
+is safe on a particular laser. It applies only when compiling a plan; existing,
+cached, hand-authored, or externally supplied `.rd` files are not rewritten or
+made safe retroactively.
 
 The following remain unsupported for every profile:
 

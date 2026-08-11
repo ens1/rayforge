@@ -359,7 +359,7 @@ def test_ruida_contour_pipeline_linearizes_arcs_and_round_trips_rd(
     ),
     (
         pytest.param(0.8, 0.2, 0.6, 16, 48, 122, id="bounded-dynamic"),
-        pytest.param(0.2, 0.0, 1.0, 0, 20, 51, id="default-20-percent"),
+        pytest.param(0.2, 0.0, 1.0, 20, 20, 51, id="default-20-percent"),
     ),
 )
 def test_engrave_pipeline_respects_dynamic_power_contract(
@@ -477,6 +477,9 @@ def test_rotated_engrave_resolves_machine_axis_and_round_trips_rd(
     assert process_documents[0]["raster"]["scan_axis"] == "horizontal"
     plan = RuidaOpsAdapter(machine).build_plan(ops)
     assert [layer.scan_axis for layer in plan.layers] == ["vertical"]
+    assert [layer.min_power_percent for layer in plan.layers] == pytest.approx(
+        [20]
+    )
 
     result = RuidaEncoder().encode(ops, machine, doc)
     assert result.payload is not None
@@ -539,6 +542,9 @@ def test_multi_workpiece_engrave_resolves_each_section_axis(
         "horizontal",
         "vertical",
     ]
+    assert [layer.min_power_percent for layer in plan.layers] == pytest.approx(
+        [20, 20]
+    )
 
     result = RuidaEncoder().encode(ops, machine, doc)
     assert result.payload is not None
@@ -870,6 +876,88 @@ def test_mixed_raster_zero_power_lines_are_travel(machine):
     )
 
 
+def test_mixed_vector_zero_power_line_fails_closed(machine):
+    metadata = _metadata(kind="mixed")
+    ops = Ops()
+    _process_start(ops, metadata)
+    _state(ops, metadata)
+    ops.ops_section_start(SectionType.VECTOR_OUTLINE, "grid")
+    ops.move_to(20, 20)
+    ops.set_power(0)
+    ops.line_to(30, 20)
+
+    with pytest.raises(
+        RuidaEncodingError,
+        match="static marking motion requires power greater than zero",
+    ):
+        RuidaOpsAdapter(machine).build_plan(ops)
+
+
+@pytest.mark.parametrize(
+    ("kind", "raster_mode", "depth_mode"),
+    (
+        ("vector", "VARIABLE_POWER", "power_modulated"),
+        ("raster", "CONSTANT_POWER", "mask_scan"),
+    ),
+)
+def test_static_zero_power_line_fails_closed(
+    machine,
+    kind,
+    raster_mode,
+    depth_mode,
+):
+    metadata = _metadata(
+        kind=kind,
+        power=0,
+        power_mode="static",
+        raster_mode=raster_mode,
+        depth_mode=depth_mode,
+    )
+    ops = Ops()
+    _process_start(ops, metadata)
+    _state(ops, metadata)
+    ops.move_to(20, 20)
+    ops.line_to(30, 20)
+    _process_end(ops, metadata)
+
+    with pytest.raises(
+        RuidaEncodingError,
+        match=(
+            "static marking motion requires power greater than zero; "
+            "set positive process power or use MoveTo"
+        ),
+    ):
+        RuidaOpsAdapter(machine).build_plan(ops)
+
+
+def test_dynamic_zero_power_line_remains_travel(machine):
+    metadata = _metadata(
+        power=0.8,
+        min_power=0,
+        max_power=0.8,
+        power_mode="dynamic",
+    )
+    ops = Ops()
+    _process_start(ops, metadata)
+    _state(ops, metadata)
+    ops.move_to(20, 20)
+    ops.line_to(24, 20)
+    ops.set_power(0)
+    ops.line_to(26, 20)
+    ops.set_power(0.8)
+    ops.line_to(30, 20)
+    _process_end(ops, metadata)
+
+    layer = RuidaOpsAdapter(machine).build_plan(ops).layers[0]
+
+    assert layer.events == (
+        TravelTo(20, 20),
+        MarkTo(24, 20),
+        TravelTo(26, 20),
+        MarkTo(30, 20),
+    )
+
+
 def test_raster_section_mode_must_match_process_metadata(machine):
     metadata = _metadata(kind="raster")
     ops = Ops()
@@ -1081,6 +1169,73 @@ def test_zero_raster_samples_are_travel_not_zero_power_marks(machine):
         SetModulation(100),
         MarkTo(24, 20),
     )
+
+
+def test_native_variable_raster_zero_minimum_uses_positive_sample_floor(
+    machine,
+    doc,
+):
+    metadata = _metadata(
+        kind="raster",
+        power=1,
+        min_power=0,
+        max_power=1,
+    )
+    ops = Ops()
+    _process_start(ops, metadata)
+    ops.move_to(20, 20)
+    ops.scan_to(
+        24,
+        20,
+        power_values=bytearray([0, 1, 2, 0]),
+    )
+    _process_end(ops, metadata)
+
+    layer = RuidaOpsAdapter(machine).build_plan(ops).layers[0]
+
+    assert layer.min_power_percent == pytest.approx(100 / 255)
+    assert layer.max_power_percent == pytest.approx(100)
+    assert layer.events == (
+        TravelTo(20, 20),
+        TravelTo(21, 20),
+        SetModulation(100 / 255),
+        MarkTo(22, 20),
+        SetModulation(200 / 255),
+        MarkTo(23, 20),
+        TravelTo(24, 20),
+    )
+    assert RuidaEncoder().encode(ops, machine, doc).payload
+
+
+@pytest.mark.parametrize(
+    ("minimum", "expected_minimum_percent"),
+    (
+        pytest.param(0.001, 0.1, id="raw-16-preserved"),
+        pytest.param(0.0009, 100 / 255, id="raw-15-derived"),
+    ),
+)
+def test_native_variable_raster_minimum_respects_observed_wire_floor(
+    machine,
+    doc,
+    minimum,
+    expected_minimum_percent,
+):
+    metadata = _metadata(
+        kind="raster",
+        power=1,
+        min_power=minimum,
+        max_power=1,
+    )
+    ops = Ops()
+    _process_start(ops, metadata)
+    ops.move_to(20, 20)
+    ops.scan_to(21, 20, power_values=bytearray([1]))
+    _process_end(ops, metadata)
+
+    layer = RuidaOpsAdapter(machine).build_plan(ops).layers[0]
+
+    assert layer.min_power_percent == pytest.approx(expected_minimum_percent)
+    assert RuidaEncoder().encode(ops, machine, doc).payload
 
 
 def test_raster_samples_compile_as_constant_power_spans(machine):
@@ -2092,6 +2247,47 @@ def test_contour_tabs_restore_baseline_power_before_following_mark(
     assert [
         record.values["power_percent"] for record in restored[2:6]
     ] == pytest.approx([20, 80, 40, 40], abs=0.004)
+
+
+def test_zero_power_contour_pipeline_fails_closed(
+    contour_step_class,
+    test_machine_and_config,
+):
+    machine, context = test_machine_and_config
+    machine.hydrate()
+    machine.driver_name = RuidaSerialDriver.__name__
+    machine.set_dialect_uid(None)
+    step = contour_step_class.create(context, name="Zero-power contour")
+    step.set_power(0)
+
+    geometry = Geometry()
+    geometry.move_to(0, 0)
+    geometry.line_to(1, 0)
+    workpiece = WorkPiece(name="zero-power line")
+    workpiece._edited_boundaries = geometry
+    workpiece.set_size(10, 1)
+    workpiece.pos = (20, 20)
+    doc = Doc()
+    workflow = doc.active_layer.workflow
+    assert workflow is not None
+    workflow.add_child(step)
+    doc.active_layer.add_child(workpiece)
+
+    completed = {}
+    execute_stages(
+        IntentBuilder(machine=machine, generation_id=1).build(doc),
+        lambda node: completed.__setitem__(node.key, node),
+    )
+
+    machine_node = completed[job_machinexform_key()]
+    encode_node = completed[job_encode_key()]
+    assert machine_node.error is None, machine_node.error
+    assert encode_node.error is not None
+    assert encode_node.error.startswith("RuidaEncodingError: ")
+    assert "static marking motion requires power greater than zero" in str(
+        encode_node.error
+    )
+    assert encode_node.output is None
 
 
 @pytest.mark.parametrize("missing_contract", ("snapshot", "api"))

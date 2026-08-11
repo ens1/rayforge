@@ -1,0 +1,145 @@
+{
+  "schema": "rayforge.hardware-ruida-zero-power-negative-evidence.v1",
+  "identifier": "boss-ls2040-usb-serial-zero-power-safety-v1",
+  "observed_on": "2026-08-10",
+  "generating_revisions": {
+    "rayforge": "43d42113c78f3267f6765120b7cae47d9f5ee3a0",
+    "ruida_re": "11ad58be14c2dde52b2a589c81c498bbd2fd4e20"
+  },
+  "scope": {
+    "severity": "P0",
+    "description": "Unexpected visible laser emission from the exact zero-power no-dwell control invalidated encoded zero power as a laser-off safety assumption on the tested Boss LS2040.",
+    "construction": "Manual Ops mirror of the MachineCmd four-corner frame loop; MachineCmd itself correctly cancels a zero-power frame before encoding.",
+    "limitations": [
+      "Only the no-dwell control was transmitted; the paired C6 11 dwell artifact was stopped and never sent.",
+      "The host transfer summary proves one packet with zero retries, not controller receipt or execution completion.",
+      "The observation does not isolate whether raw zero means default, stale, or no update; whether the controller or power supply applies a firing floor; or whether another encoded field contributes.",
+      "The minimal through-power records are present, but their contribution was not isolated and must not be asserted as the cause.",
+      "The operator's approximate rectangle dimensions are not metrology; the decoded controller bounds are 45 by 17 millimetres."
+    ]
+  },
+  "environment": {
+    "host_platform": "macOS",
+    "machine": "Boss LS2040",
+    "configured_controller_profile": "Ruida 644XS",
+    "transport": {
+      "kind": "USB serial",
+      "baud": 115200,
+      "controller_acknowledgement_available": false,
+      "execution_acknowledgement_available": false
+    },
+    "material": {
+      "description": "cardboard",
+      "dimensions_mm": [
+        152.4,
+        762.0
+      ],
+      "reported_origin_mm": {
+        "x": 0.0,
+        "y": 0.0
+      }
+    },
+    "physical_source_inhibited": false
+  },
+  "process": {
+    "profile": "stationary-research",
+    "construction": "manual Ops mirror of MachineCmd four-corner frame",
+    "nominal_power_percent": 0.0,
+    "speed_mm_s": 100.0,
+    "air_assist_requested": false,
+    "controller_bounds_mm": {
+      "min_x": 55.0,
+      "min_y": 125.0,
+      "max_x": 100.0,
+      "max_y": 142.0
+    },
+    "offline_machine_cmd_zero_power_guard_reproduction": "returned-before-encoding"
+  },
+  "artifacts": {
+    "control": {
+      "file": "boss-ls2040-frame-0pct-no-dwell-y125-offline-v1.rd.quarantined",
+      "original_capture_filename": "boss-ls2040-frame-0pct-no-dwell-y125-offline-v1.rd",
+      "sha256": "2c042a41bacecc5969cf6407d668055dc6ae6fd8980f26e42cca6c13c7ebc410",
+      "size_bytes": 558,
+      "checksum": 25008,
+      "records": 76,
+      "known_records": 76,
+      "opaque_records": 0,
+      "issues": [],
+      "exact_preserve_roundtrip": true,
+      "exact_recompute_roundtrip": true,
+      "laser_1_layer_and_active_power_percent": 0.0,
+      "laser_2_inactive_power_percent": 39.99877922236465,
+      "laser_enable_mask": 1,
+      "through_power_1_percent": 0.0061038881767686015,
+      "through_power_2_percent": 0.0061038881767686015,
+      "travel_events": 4,
+      "mark_events": 4,
+      "c610_laser_interval_records": 0,
+      "c611_additional_delay_records": 0
+    },
+    "dwell": {
+      "file": "boss-ls2040-frame-0pct-4x200ms-y125-offline-v1.rd.quarantined",
+      "original_capture_filename": "boss-ls2040-frame-0pct-4x200ms-y125-offline-v1.rd",
+      "sha256": "d6ea0e936e5963fc1dc8d234af8d29219675339af32ad4797c1d4bde640d7b5a",
+      "size_bytes": 586,
+      "checksum": 26276,
+      "records": 80,
+      "known_records": 80,
+      "opaque_records": 0,
+      "issues": [],
+      "exact_preserve_roundtrip": true,
+      "exact_recompute_roundtrip": true,
+      "c610_laser_interval_records": 0,
+      "c611_additional_delay_records": 4,
+      "c611_additional_delay_ms": [
+        200.0,
+        200.0,
+        200.0,
+        200.0
+      ],
+      "transmitted": false,
+      "send_authorized": false,
+      "quarantine": "do-not-send"
+    }
+  },
+  "pair_comparison": {
+    "decoded_records_identical_except": [
+      "four C6 11 additional_delay records",
+      "derived file_checksum value"
+    ],
+    "c611_hardware_execution_evidence": "untested"
+  },
+  "transmission": {
+    "control": {
+      "explicit_operator_approval": true,
+      "artifact_sha256": "2c042a41bacecc5969cf6407d668055dc6ae6fd8980f26e42cca6c13c7ebc410",
+      "host_log": {
+        "scope": "host-side driver transfer summary",
+        "packets": 1,
+        "retries": 0,
+        "controller_acknowledgement": false,
+        "execution_acknowledgement": false
+      }
+    },
+    "dwell": {
+      "transmitted": false,
+      "packets": 0,
+      "retries": 0,
+      "controller_acknowledgement": false,
+      "execution_acknowledgement": false
+    }
+  },
+  "operator_observation": {
+    "reported_verbatim": "There was laser emission. I see a clearly drawn rectangle, maybe 25mmx50mm",
+    "dimensional_evidence": "approximate-operator-description-only"
+  },
+  "result": {
+    "status": "p0-negative-evidence",
+    "encoded_zero_power_suppresses_emission": "contradicted-on-exact-tested-control",
+    "causal_mechanism": "not-isolated",
+    "c611_dwell_execution_evidence": "untested",
+    "dwell_artifact_disposition": "do-not-send",
+    "zero_power_safety_assumption": "prohibited"
+  }
+}

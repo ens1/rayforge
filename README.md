@@ -114,12 +114,15 @@ Rayforge compiles complete Ruida `.rd` programs through
 [ruida-re](https://github.com/ens1/ruida-re) and transfers them over USB
 serial or UDP. The conservative, hardware-observed `proven` profile remains
 the default. Advanced behavior must be enabled with an explicit research
-profile. Narrow, single-section, five-line planned-path coupons have been run
-on a Boss LS2040 over USB serial: a direct 10% coupon produced the expected
-motion without visible marks, while direct and Rayforge-generated 15% coupons
-produced visible lines. All ran at 100 mm/s.
+profile. Narrow planned-path coupons have been run on a Boss LS2040 over USB
+serial. A direct 10% coupon produced the expected motion without visible
+marks, while direct and Rayforge-generated 15% single-section coupons produced
+visible lines. A separate Rayforge 15% cross-hatch coupon executed two
+five-mark diagonal sections at 100 mm/s; the operator reported both directions
+visible and no connection burns. Its small top-left edge is a decoded 0.3507 mm
+`cut_relative` mark, not evidence for pulse control.
 
-Three one-layer dynamic-vector coupons were also run on that machine at
+Four one-layer dynamic-vector coupons were also run on that machine at
 100 mm/s. The first, planned as 15%-10%-15%, looked solid and did not establish
 that power changed. On a longer 15%-5%-15% coupon, the operator observed good
 motion but only the first 30 mm marked. Review of that exact payload found a
@@ -127,22 +130,33 @@ reduced-power envelope before the middle span and no baseline-power restore
 before the final span. Rayforge therefore requires a restoration-capable
 `ruida-re` compiler and rejects older compilers before transfer. A corrected
 15%-5%-15% coupon with an explicit restore produced the operator-reported
-result "a ~30mm line, a gap, and a ~30mm line." That establishes only this
-exact restore subset on one machine; it is not calibrated power or zero-output
-evidence. The broad dynamic profile remains research-only, and other powers,
-speeds, geometries, or combinations are unvalidated. Every other accepted
-planned-path combination and all remaining research profiles are backed by
-offline LightBurn 2.1.03 fixtures only. Research profiles emit a warning and
-reject requests outside their narrow evidence before transfer.
+result "a ~30mm line, a gap, and a ~30mm line." A fourth 15%-5%-15%-5%-15%
+coupon encoded two reductions and two explicit restorations over five planned
+16 mm spans; the operator reported three lines and two gaps. Those results
+establish only the exact restore sequences on one machine. They are not
+calibrated power or zero-output evidence, and the broad dynamic profile remains
+research-only.
+
+A subsequent nominal-0% four-side control emitted enough laser power to draw a
+visible rectangle on the same Boss. The cause is unknown: raw zero may have
+default, stale, or no-update semantics; a firing floor or another field may
+contribute. Rayforge now rejects static marking motion at zero power, and the
+`ruida-re` compiler rejects enabled marking power fields and raster modulation
+below the observed raw-field floor of 16. That is a fail-closed generation
+boundary, not proof that low positive power is physically safe. Existing or
+externally supplied `.rd` files receive no retroactive protection. The paired
+C6 11 dwell job and the planned Z coupons were never sent and remain untested
+and quarantined. Research profiles emit a warning and reject requests outside
+their narrow evidence before transfer.
 
 The opt-in profiles cover constant-power diagonal or cross-hatch planned-path
 raster, selecting either Ruida laser channel 1 or 2 (never both at once),
 vector Dwell from manual Ops or frame corner pauses, 10-20 kHz RF frequency,
 0-0.2 µs (0-200 ns) fiber pulse width, a balanced logical Z offset of up to
 ±1 mm for one native raster layer, and reduced vector power at tabs. Research
-profiles are not composable. Rotary, cut-through controls, generic endpoint Z
-motion, stationary marking Pulse, and other unobserved combinations remain
-unsupported.
+profiles are not composable. Dwell and Z remain offline-only after the unsafe
+zero-power control; rotary, cut-through controls, generic endpoint Z motion,
+stationary marking Pulse, and other unobserved combinations remain unsupported.
 
 Ruida drivers are transfer-only. They do not manage the controller or monitor
 job execution, so a successful transfer is not confirmation that cutting or

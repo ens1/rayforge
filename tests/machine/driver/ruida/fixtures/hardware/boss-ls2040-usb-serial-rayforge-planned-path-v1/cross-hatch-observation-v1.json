@@ -1,0 +1,135 @@
+{
+  "schema": "rayforge.hardware-ruida-cross-hatch-observation.v1",
+  "identifier": "boss-ls2040-cross-hatch-45-15pct-y110-v1",
+  "observed_on": "2026-08-10",
+  "generating_revisions": {
+    "rayforge": "43d42113c78f3267f6765120b7cae47d9f5ee3a0",
+    "raygeo": "5663bec8c5d47ebb7f3f09d6df0658f5bdac8583",
+    "ruida_re": "11ad58be14c2dde52b2a589c81c498bbd2fd4e20"
+  },
+  "scope": {
+    "description": "One supervised execution of an exact Rayforge-generated, two-section cross-hatch planned-path artifact on one Boss LS2040.",
+    "validated_subset": [
+      "One layer-zero planned-path raster with two RasterSection blocks.",
+      "Five constant-power marks in each diagonal direction at 15 percent requested power and 100 millimetres per second.",
+      "One section-separator layer-control operation 5 between the sections.",
+      "Dark travel between marks, including across the section boundary, as visually reported by the operator."
+    ],
+    "limitations": [
+      "The host transfer summary proves one packet with zero retries, not controller receipt or execution completion.",
+      "The observation is visual, not dimensional, angular, timing, optical-power, or electrical metrology.",
+      "The tiny final edge-clipped mark is an ordinary cut_relative motion command, not evidence for C6 10 pulse behavior.",
+      "This exact coupon does not promote the broad planned-path profile or validate other powers, speeds, geometries, layers, controllers, transports, or combinations."
+    ]
+  },
+  "environment": {
+    "host_platform": "macOS",
+    "machine": "Boss LS2040",
+    "configured_controller_profile": "Ruida 644XS",
+    "transport": {
+      "kind": "USB serial",
+      "baud": 115200,
+      "controller_acknowledgement_available": false,
+      "execution_acknowledgement_available": false
+    },
+    "material": {
+      "description": "cardboard",
+      "dimensions_mm": [
+        152.4,
+        762.0
+      ],
+      "reported_origin_mm": {
+        "x": 0.0,
+        "y": 0.0
+      }
+    }
+  },
+  "process": {
+    "profile": "planned-path-research",
+    "kind": "raster",
+    "raster_processing": "planned-path",
+    "depth_mode": "CONSTANT_POWER",
+    "rayforge_laser_channel_intent": 1,
+    "requested_power_percent": 15.0,
+    "encoded_power_percent": 14.997253250320455,
+    "speed_mm_s": 100.0,
+    "source_scan_angle_degrees": 45.0,
+    "cross_hatch": true,
+    "line_interval_mm": 5.0,
+    "sample_interval_mm": 0.5,
+    "overscan_enabled": false,
+    "air_assist_requested": false
+  },
+  "artifact": {
+    "file": "boss-ls2040-cross-hatch-45-15pct-y110-offline-v1.rd",
+    "sha256": "a44ca69b60c656894855435b81325906f1eb57351e2c6a5fce1827e2e225f3e3",
+    "size_bytes": 666,
+    "checksum": 34332,
+    "decode": {
+      "records": 102,
+      "known_records": 102,
+      "opaque_records": 0,
+      "issues": [],
+      "exact_preserve_roundtrip": true,
+      "exact_recompute_roundtrip": true
+    },
+    "controller_bounds_mm": {
+      "min_x": 24.13,
+      "min_y": 113.965,
+      "max_x": 40.134,
+      "max_y": 130.134
+    },
+    "motion": {
+      "raster_sections": 2,
+      "section_mark_counts": [
+        5,
+        5
+      ],
+      "travel_events": 10,
+      "mark_events": 10,
+      "connector_marks": 0,
+      "controller_slope_signs": [
+        -1,
+        1
+      ],
+      "section_separator_operation_5_count": 1
+    },
+    "edge_clipped_mark": {
+      "motion_ordinal": 10,
+      "command": "cut_relative",
+      "delta_mm": {
+        "x": -0.248,
+        "y": -0.248
+      },
+      "decoded_length_mm": 0.3507249631848476,
+      "operator_location": "top left",
+      "c610_laser_interval_records": 0,
+      "interpretation": "The visible small edge is consistent with this decoded ordinary cut; it does not establish pulse control."
+    }
+  },
+  "transmission": {
+    "explicit_operator_approval": true,
+    "artifact_sha256": "a44ca69b60c656894855435b81325906f1eb57351e2c6a5fce1827e2e225f3e3",
+    "host_log": {
+      "scope": "host-side driver transfer summary",
+      "packets": 1,
+      "retries": 0,
+      "controller_acknowledgement": false,
+      "execution_acknowledgement": false
+    }
+  },
+  "operator_observation": {
+    "reported_verbatim": "Crosshatch is good. Both directions are visible, no connection burns, and no burns. I can see the one small edge, the beam obviously pulsed at the top left of the crosshatch",
+    "dimensional_evidence": "not-measured",
+    "pulse_control_evidence": "not-established"
+  },
+  "result": {
+    "status": "scoped-pass",
+    "two_section_cross_hatch_execution_evidence": "operator-observed",
+    "both_diagonal_directions_visible": "operator-observed",
+    "connector_burn_evidence": "not-observed",
+    "c610_pulse_execution_evidence": "not-observed",
+    "mode_wide_execution_evidence": "not-observed",
+    "default_profile_promotion": "withheld"
+  }
+}
