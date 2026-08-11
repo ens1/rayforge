@@ -3,12 +3,24 @@
   "identifier": "hardware-boss-ls2040-usb-serial-rayforge-dynamic-vector-v1",
   "observed_on": "2026-08-10",
   "generating_revisions": {
-    "rayforge": "b288e1960419ce1b14642ab4ead8ac8f6a08b92d",
-    "raygeo": "5663bec8c5d47ebb7f3f09d6df0658f5bdac8583",
-    "ruida_re": "7ef0ff5011bd0684a2a70cb72c43e666f9438651"
+    "dynamic-vector-15-10-15-v1": {
+      "rayforge": "b288e1960419ce1b14642ab4ead8ac8f6a08b92d",
+      "raygeo": "5663bec8c5d47ebb7f3f09d6df0658f5bdac8583",
+      "ruida_re": "7ef0ff5011bd0684a2a70cb72c43e666f9438651"
+    },
+    "dynamic-vector-15-5-15-v2": {
+      "rayforge": "b288e1960419ce1b14642ab4ead8ac8f6a08b92d",
+      "raygeo": "5663bec8c5d47ebb7f3f09d6df0658f5bdac8583",
+      "ruida_re": "7ef0ff5011bd0684a2a70cb72c43e666f9438651"
+    },
+    "dynamic-vector-15-5-15-restore-v3": {
+      "rayforge": "b435776393049eb97cb878c81f6bcbf76e6503cc",
+      "raygeo": "5663bec8c5d47ebb7f3f09d6df0658f5bdac8583",
+      "ruida_re": "a97a8f4e13fb8da39bc8f009a2de310ab26a478b"
+    }
   },
   "scope": {
-    "description": "Two supervised executions of exact Rayforge-generated dynamic vector power artifacts on one Boss LS2040.",
+    "description": "Three supervised executions of exact Rayforge-generated dynamic vector power artifacts on one Boss LS2040.",
     "generation_path": [
       "ContourStep",
       "Rayforge tab transformer",
@@ -17,12 +29,12 @@
       "RuidaEncoder"
     ],
     "recipe_content_addressed": false,
-    "recipe_note": "The original in-memory source recipes were not preserved. The executed .rd artifacts are immutable; no replacement source recipe is claimed.",
+    "recipe_note": "The original in-memory source recipes for v1 and v2 were not preserved. The exact v3 generation semantics are content-addressed in its job record. Every executed .rd artifact is immutable.",
     "limitations": [
       "The USB serial host summaries prove transfer activity only; they have no controller or execution-completion acknowledgement.",
       "The observations are visual operator reports, not dimensional, timing, optical-power, or electrical metrology.",
       "The single-tube observations do not establish physical Ruida laser-channel routing or inactive channel behavior.",
-      "The observations do not validate arbitrary power values, multiple reduced spans, other speeds, other geometry, raster modulation, extra laser heads, UDP, Z, dwell, pulse, frequency, or rotary behavior."
+      "The exact v3 restoration subset does not validate arbitrary power values, multiple reduced spans, other speeds, other geometry, raster modulation, extra laser heads, UDP, Z, dwell, pulse, frequency, or rotary behavior."
     ]
   },
   "environment": {
@@ -254,16 +266,218 @@
         "mode_wide_execution_evidence": "not-observed",
         "default_profile_promotion": "withheld"
       }
+    },
+    {
+      "identifier": "dynamic-vector-15-5-15-restore-v3",
+      "artifact": {
+        "file": "boss-ls2040-dynamic-restore-15-5-15-y95-offline-v3.rd",
+        "sha256": "99cfcddb7dfde003f1eccffeaa9b5dcdac24da3dcb5342c2ac13cd4497a5a1f4",
+        "size_bytes": 564,
+        "checksum": 27344,
+        "records": 86,
+        "known_records": 86,
+        "opaque_records": 0,
+        "issues": [],
+        "exact_preserve_roundtrip": true,
+        "exact_recompute_roundtrip": true
+      },
+      "process": {
+        "profile": "dynamic-power-research",
+        "kind": "vector",
+        "speed_mm_s": 100.0,
+        "air_assist_requested": false,
+        "rayforge_laser_channel_intent": 1,
+        "planned_span_lengths_mm": [
+          30.0,
+          30.0,
+          30.0
+        ],
+        "planned_span_power_percent": [
+          15.0,
+          5.0,
+          15.0
+        ],
+        "layer_laser_1_power_percent": {
+          "minimum": 4.999084416773485,
+          "maximum": 14.997253250320455
+        },
+        "reduced_laser_1_power_percent": {
+          "minimum": 4.999084416773485,
+          "maximum": 4.999084416773485
+        },
+        "restored_laser_1_power_percent": {
+          "minimum": 4.999084416773485,
+          "maximum": 14.997253250320455
+        },
+        "inactive_laser_2_power_percent": {
+          "minimum": 39.99877922236465,
+          "maximum": 39.99877922236465
+        }
+      },
+      "motion": [
+        {
+          "type": "travel_to",
+          "x_mm": 30.0,
+          "y_mm": 95.0
+        },
+        {
+          "type": "mark_to",
+          "x_mm": 60.0,
+          "y_mm": 95.0
+        },
+        {
+          "type": "mark_with_power",
+          "x_mm": 90.0,
+          "y_mm": 95.0
+        },
+        {
+          "type": "mark_to_after_explicit_restore",
+          "x_mm": 120.0,
+          "y_mm": 95.0
+        }
+      ],
+      "dynamic_envelopes": [
+        {
+          "role": "reduce-before-middle-mark",
+          "immediately_before_motion_index": 2,
+          "records": [
+            "layer_control(operation=5)",
+            "select_layer(layer=0)",
+            "laser_1_min_power(4.999084416773485)",
+            "laser_1_max_power(4.999084416773485)",
+            "laser_2_min_power(39.99877922236465)",
+            "laser_2_max_power(39.99877922236465)",
+            "external_io(value=0)"
+          ]
+        },
+        {
+          "role": "restore-before-trailing-mark",
+          "immediately_before_motion_index": 3,
+          "records": [
+            "layer_control(operation=5)",
+            "select_layer(layer=0)",
+            "laser_1_min_power(4.999084416773485)",
+            "laser_1_max_power(14.997253250320455)",
+            "laser_2_min_power(39.99877922236465)",
+            "laser_2_max_power(39.99877922236465)",
+            "external_io(value=0)"
+          ]
+        }
+      ],
+      "generation_recipe_content_addressed": true,
+      "generation_recipe_sha256": "9fcaa25a2d794142e3056c24e5cedaf92194990513aedfd88b5d47a074f29c1e",
+      "generation_recipe": {
+        "schema": "rayforge.hardware-ruida-dynamic-restore-recipe.v1",
+        "hardware_io": false,
+        "device_enumeration": false,
+        "pipeline": [
+          "ContourStep",
+          "TabsSpec",
+          "IntentBuilder",
+          "Raygeo machine transform",
+          "RuidaEncoder"
+        ],
+        "machine": {
+          "axis_extents_mm": [
+            991.1080322265625,
+            599.947998046875
+          ],
+          "origin": "top_right",
+          "reverse_x_axis": false,
+          "reverse_y_axis": false,
+          "active_wcs": "G54",
+          "wcs_offset_mm": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "rotary_enabled": false,
+          "auto_connect": false,
+          "driver_during_planning": "NoDevice",
+          "dialect_during_planning": "grbl",
+          "maximum_cut_speed_mm_s": 100.0,
+          "maximum_travel_speed_mm_s": 166.66666666666666,
+          "laser_head_uid": "laser-0",
+          "laser_head_tool_number": 0
+        },
+        "geometry": {
+          "normalized_move_to": [
+            1.0,
+            1.0
+          ],
+          "normalized_line_to": [
+            0.0,
+            1.0
+          ],
+          "workpiece_size_mm": [
+            90.0,
+            1.0
+          ],
+          "machine_item_position_mm": [
+            30.0,
+            95.0
+          ],
+          "tab": {
+            "width_mm": 30.0,
+            "segment_index": 1,
+            "position": 0.5
+          }
+        },
+        "process": {
+          "profile": "dynamic-power-research",
+          "baseline_power_percent": 15.0,
+          "tab_power_ratio": 0.3333333333333333,
+          "effective_tab_power_percent": 5.0,
+          "speed_mm_s": 100.0,
+          "travel_speed_mm_s": 166.66666666666666,
+          "air_assist_requested": false,
+          "rayforge_laser_channel_intent": 1,
+          "inactive_laser_2_power_percent": [
+            40.0,
+            40.0
+          ],
+          "inactive_laser_2_powers_confirmed": true
+        }
+      },
+      "transmission": {
+        "explicit_operator_approval": true,
+        "artifact_sha256": "99cfcddb7dfde003f1eccffeaa9b5dcdac24da3dcb5342c2ac13cd4497a5a1f4",
+        "host_log": {
+          "scope": "host-side driver transfer summary",
+          "packets": 1,
+          "retries": 0,
+          "controller_acknowledgement": false,
+          "execution_acknowledgement": false
+        }
+      },
+      "operator_observation": {
+        "reported_verbatim": [
+          "Perfect. A ~30mm line, a gap, and a ~30mm line"
+        ]
+      },
+      "result": {
+        "status": "operator-reported-line-gap-line",
+        "scoped_execution_evidence": "operator-observed",
+        "reduced_power_visible_effect_evidence": "operator-observed",
+        "explicit_baseline_restore_evidence": "operator-observed",
+        "exact_restore_subset_evidence": "operator-observed",
+        "broad_dynamic_profile_evidence": "research-only",
+        "other_combinations_evidence": "unvalidated",
+        "mode_wide_execution_evidence": "not-observed",
+        "default_profile_promotion": "withheld"
+      }
     }
   ],
   "conclusion": {
     "observed": [
       "The second job moved continuously and marked only its first baseline-power span.",
       "The reduced-power envelope produced a visible transition from marking to no visible marking.",
-      "With no explicit restore envelope, the trailing ordinary mark did not visibly return to baseline behavior."
+      "With no explicit restore envelope, the trailing ordinary mark did not visibly return to baseline behavior.",
+      "The third job used the corrected explicit restore envelope and produced the operator-reported line-gap-line result."
     ],
     "inference": "For this controller and job shape, the active power values set by the dynamic envelope persist until another power-setting envelope changes them.",
-    "required_encoder_change": "Emit an explicit layer-baseline power envelope before a normal baseline mark that follows a reduced-power mark.",
-    "validation_required": "The corrected restoration sequence requires offline validation before another separately approved hardware execution."
+    "implemented_encoder_change": "Emit an explicit layer-baseline power envelope before a normal baseline mark that follows a reduced-power mark.",
+    "operator_observed_subset": "One one-layer, 100 mm/s vector coupon with Rayforge head-1 intent on one Boss LS2040 used planned 30 mm spans at 15%, 5%, and 15% and produced a visible line, gap, and visible line.",
+    "validation_required": "The broad dynamic-power profile remains research-only; other powers, speeds, geometries, repeated reduced spans, controllers, transports, and advanced-control combinations remain unvalidated."
   }
 }

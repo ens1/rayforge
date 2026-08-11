@@ -119,18 +119,21 @@ on a Boss LS2040 over USB serial: a direct 10% coupon produced the expected
 motion without visible marks, while direct and Rayforge-generated 15% coupons
 produced visible lines. All ran at 100 mm/s.
 
-Two one-layer dynamic-vector coupons were also run on that machine at
+Three one-layer dynamic-vector coupons were also run on that machine at
 100 mm/s. The first, planned as 15%-10%-15%, looked solid and did not establish
 that power changed. On a longer 15%-5%-15% coupon, the operator observed good
 motion but only the first 30 mm marked. Review of that exact payload found a
 reduced-power envelope before the middle span and no baseline-power restore
 before the final span. Rayforge therefore requires a restoration-capable
-`ruida-re` compiler and rejects older compilers before transfer. The corrected
-restoration sequence has offline evidence only; the dynamic profile remains
-research-only. Every other accepted planned-path combination and all remaining
-research profiles are backed by offline LightBurn 2.1.03 fixtures only.
-Research profiles emit a warning and reject requests outside their narrow
-evidence before transfer.
+`ruida-re` compiler and rejects older compilers before transfer. A corrected
+15%-5%-15% coupon with an explicit restore produced the operator-reported
+result "a ~30mm line, a gap, and a ~30mm line." That establishes only this
+exact restore subset on one machine; it is not calibrated power or zero-output
+evidence. The broad dynamic profile remains research-only, and other powers,
+speeds, geometries, or combinations are unvalidated. Every other accepted
+planned-path combination and all remaining research profiles are backed by
+offline LightBurn 2.1.03 fixtures only. Research profiles emit a warning and
+reject requests outside their narrow evidence before transfer.
 
 The opt-in profiles cover constant-power diagonal or cross-hatch planned-path
 raster, selecting either Ruida laser channel 1 or 2 (never both at once),

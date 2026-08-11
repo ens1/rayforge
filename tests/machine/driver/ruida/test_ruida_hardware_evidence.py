@@ -9,18 +9,29 @@ from typing import Any, cast
 
 import pytest
 from PIL import Image
+from raygeo.geo import Geometry
+from raygeo.ops.transform.tabs import TabsSpec
+from raygeo.ops.types import CommandType
 from raygeo.pipeline.execute import execute_stages
 from ruida_re import KnownCommand, RuidaCodec
 
 from rayforge.core.doc import Doc
+from rayforge.core.tab import Tab
 from rayforge.core.vectorization_spec import TraceSpec
 from rayforge.core.workpiece import WorkPiece
 from rayforge.image.png.importer import PngImporter
+from rayforge.machine.driver.ruida.ruida_encoder import RuidaEncoder
 from rayforge.machine.driver.ruida.ruida_serial_driver import (
     RuidaSerialDriver,
 )
+from rayforge.machine.models.laser import Laser
 from rayforge.machine.models.machine import Origin
-from rayforge.pipeline.intent_builder import IntentBuilder, job_encode_key
+from rayforge.pipeline.intent_builder import (
+    IntentBuilder,
+    job_encode_key,
+    job_machinexform_key,
+    workpiece_key,
+)
 
 FIXTURE = (
     Path(__file__).parent
@@ -48,6 +59,10 @@ DYNAMIC_ARTIFACTS = {
     "dynamic-vector-15-5-15-v2": (
         "boss-ls2040-dynamic-15-5-15-v2.rd",
         "723f5f8de65db05717ac95d9c7d11774dab9af558338c4b8daa486afb95f129b",
+    ),
+    "dynamic-vector-15-5-15-restore-v3": (
+        "boss-ls2040-dynamic-restore-15-5-15-y95-offline-v3.rd",
+        "99cfcddb7dfde003f1eccffeaa9b5dcdac24da3dcb5342c2ac13cd4497a5a1f4",
     ),
 }
 POWER_COMMANDS = {
@@ -533,19 +548,28 @@ def test_dynamic_hardware_evidence_is_content_addressed_and_sanitized() -> (
     assert manifest["schema"] == (
         "rayforge.hardware-ruida-dynamic-vector-observation.v1"
     )
-    assert manifest["generating_revisions"] == {
+    initial_revisions = {
         "rayforge": "b288e1960419ce1b14642ab4ead8ac8f6a08b92d",
         "raygeo": "5663bec8c5d47ebb7f3f09d6df0658f5bdac8583",
         "ruida_re": "7ef0ff5011bd0684a2a70cb72c43e666f9438651",
     }
+    assert manifest["generating_revisions"] == {
+        "dynamic-vector-15-10-15-v1": initial_revisions,
+        "dynamic-vector-15-5-15-v2": initial_revisions,
+        "dynamic-vector-15-5-15-restore-v3": {
+            "rayforge": "b435776393049eb97cb878c81f6bcbf76e6503cc",
+            "raygeo": "5663bec8c5d47ebb7f3f09d6df0658f5bdac8583",
+            "ruida_re": "a97a8f4e13fb8da39bc8f009a2de310ab26a478b",
+        },
+    }
     assert manifest["scope"]["recipe_content_addressed"] is False
-    assert len(manifest["jobs"]) == len(DYNAMIC_ARTIFACTS) == 2
+    assert len(manifest["jobs"]) == len(DYNAMIC_ARTIFACTS) == 3
 
     for identifier, (filename, expected_sha256) in DYNAMIC_ARTIFACTS.items():
         artifact = (DYNAMIC_FIXTURE / filename).read_bytes()
         job = _dynamic_job(identifier)
         assert job["artifact"]["file"] == filename
-        assert len(artifact) == job["artifact"]["size_bytes"] == 539
+        assert len(artifact) == job["artifact"]["size_bytes"]
         assert hashlib.sha256(artifact).hexdigest() == expected_sha256
         assert job["artifact"]["sha256"] == expected_sha256
 
@@ -572,8 +596,8 @@ def test_dynamic_hardware_artifacts_decode_and_roundtrip_exactly(
     codec = RuidaCodec(context="job")
 
     assert program.issues == artifact["issues"] == []
-    assert len(program.records) == artifact["records"] == 79
-    assert len(records) == artifact["known_records"] == 79
+    assert len(program.records) == artifact["records"]
+    assert len(records) == artifact["known_records"]
     assert artifact["opaque_records"] == 0
     assert (
         codec.encode(
@@ -698,11 +722,234 @@ def test_dynamic_hardware_artifacts_capture_the_missing_restore(
     )
 
 
+def test_dynamic_hardware_v3_contains_the_observed_restore_subset() -> None:
+    identifier = "dynamic-vector-15-5-15-restore-v3"
+    _, _, records = _dynamic_program(identifier)
+    job = _dynamic_job(identifier)
+    names = [record.name for record in records]
+    expected_motion = [
+        (30.0, 95.0),
+        (60.0, 95.0),
+        (90.0, 95.0),
+        (120.0, 95.0),
+    ]
+
+    assert [
+        (float(event["x_mm"]), float(event["y_mm"]))
+        for event in _decoded_motion(records)
+    ] == expected_motion
+    assert [
+        record.values["operation"]
+        for record in records
+        if record.name == "layer_control"
+    ] == [0, 48, 16, 18, 5, 5]
+
+    cut_indices = [
+        index for index, name in enumerate(names) if name.startswith("cut_")
+    ]
+    assert len(cut_indices) == 3
+    envelope_names = [
+        "layer_control",
+        "select_layer",
+        "laser_1_min_power",
+        "laser_1_max_power",
+        "laser_2_min_power",
+        "laser_2_max_power",
+        "external_io",
+    ]
+    for cut_index, envelope in zip(
+        cut_indices[1:],
+        job["dynamic_envelopes"],
+        strict=True,
+    ):
+        start = cut_index - len(envelope_names)
+        assert names[start:cut_index] == envelope_names
+        powers = [
+            record.values["power_percent"]
+            for record in records[start + 2 : cut_index - 1]
+        ]
+        expected = [
+            float(record.rsplit("(", 1)[1].rstrip(")"))
+            for record in envelope["records"][2:6]
+        ]
+        assert powers == pytest.approx(expected)
+
+    assert job["dynamic_envelopes"][0]["role"] == ("reduce-before-middle-mark")
+    assert job["dynamic_envelopes"][1]["role"] == (
+        "restore-before-trailing-mark"
+    )
+    assert set(names).isdisjoint(
+        {
+            "additional_delay",
+            "layer_fiber_pulse_width",
+            "layer_frequency",
+            "laser_interval",
+            "z_offset_delta",
+        }
+    )
+    assert not any("raster" in name or "scan" in name for name in names)
+
+
+def test_dynamic_hardware_v3_recipe_is_content_addressed() -> None:
+    job = _dynamic_job("dynamic-vector-15-5-15-restore-v3")
+    recipe = job["generation_recipe"]
+    serialized = json.dumps(
+        recipe,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode()
+
+    assert job["generation_recipe_content_addressed"] is True
+    assert (
+        hashlib.sha256(serialized).hexdigest()
+        == (job["generation_recipe_sha256"])
+    )
+    assert recipe["schema"] == (
+        "rayforge.hardware-ruida-dynamic-restore-recipe.v1"
+    )
+    assert recipe["hardware_io"] is False
+    assert recipe["device_enumeration"] is False
+    assert recipe["process"]["effective_tab_power_percent"] == 5.0
+    assert (
+        recipe["process"]["baseline_power_percent"]
+        * recipe["process"]["tab_power_ratio"]
+        == recipe["process"]["effective_tab_power_percent"]
+    )
+    assert recipe["machine"]["driver_during_planning"] == "NoDevice"
+
+
+def test_current_pipeline_regenerates_exact_observed_dynamic_restore(
+    contour_step_class,
+    test_machine_and_config,
+) -> None:
+    identifier = "dynamic-vector-15-5-15-restore-v3"
+    job = _dynamic_job(identifier)
+    recipe = job["generation_recipe"]
+    machine_recipe = recipe["machine"]
+    geometry_recipe = recipe["geometry"]
+    process = recipe["process"]
+    machine, config = test_machine_and_config
+
+    machine.name = "Boss LS2040 offline coupon model"
+    machine.auto_connect = machine_recipe["auto_connect"]
+    machine.set_axis_extents(*machine_recipe["axis_extents_mm"])
+    machine.set_origin(Origin(machine_recipe["origin"]))
+    machine.set_reverse_x_axis(machine_recipe["reverse_x_axis"])
+    machine.set_reverse_y_axis(machine_recipe["reverse_y_axis"])
+    machine.set_rotary_enabled_default(machine_recipe["rotary_enabled"])
+    machine.set_active_wcs(machine_recipe["active_wcs"])
+    machine.update_wcs_offset(
+        machine_recipe["active_wcs"],
+        tuple(machine_recipe["wcs_offset_mm"]),
+    )
+    machine.set_dialect_uid(machine_recipe["dialect_during_planning"])
+    machine.hydrate()
+    machine.max_cut_speed = machine_recipe["maximum_cut_speed_mm_s"] * 60
+    machine.max_travel_speed = machine_recipe["maximum_travel_speed_mm_s"] * 60
+    machine.heads.clear()
+    laser = Laser()
+    laser.uid = machine_recipe["laser_head_uid"]
+    laser.tool_number = machine_recipe["laser_head_tool_number"]
+    machine.add_head(laser)
+    machine.driver_name = None
+    machine.driver_args = {
+        "job_profile": process["profile"],
+        "laser_2_inactive_min_power_percent": process[
+            "inactive_laser_2_power_percent"
+        ][0],
+        "laser_2_inactive_max_power_percent": process[
+            "inactive_laser_2_power_percent"
+        ][1],
+        "laser_2_inactive_powers_confirmed": process[
+            "inactive_laser_2_powers_confirmed"
+        ],
+    }
+
+    step = contour_step_class.create(
+        config,
+        name="Offline dynamic restoration coupon",
+        optimize=False,
+    )
+    step.set_power(process["baseline_power_percent"] / 100)
+    step.set_tab_power(process["tab_power_ratio"])
+    step.set_cut_speed(int(process["speed_mm_s"] * 60))
+    step.set_travel_speed(int(process["travel_speed_mm_s"] * 60))
+    step.set_air_assist(process["air_assist_requested"])
+
+    geometry = Geometry()
+    geometry.move_to(*geometry_recipe["normalized_move_to"])
+    geometry.line_to(*geometry_recipe["normalized_line_to"])
+    workpiece = WorkPiece(name="offline-y95-line")
+    workpiece._edited_boundaries = geometry
+    workpiece.set_size(*geometry_recipe["workpiece_size_mm"])
+    workpiece.pos = machine.get_coordinate_space().machine_item_to_world(
+        tuple(geometry_recipe["machine_item_position_mm"]),
+        workpiece.size,
+    )
+    tab = geometry_recipe["tab"]
+    workpiece.tabs = [
+        Tab(
+            width=tab["width_mm"],
+            segment_index=tab["segment_index"],
+            pos=tab["position"],
+        )
+    ]
+
+    doc = Doc()
+    workflow = doc.active_layer.workflow
+    assert workflow is not None
+    workflow.add_child(step)
+    doc.active_layer.add_child(workpiece)
+    nodes = IntentBuilder(machine=machine, generation_id=1).build(doc)
+    workpiece_node = next(
+        node
+        for node in nodes
+        if node.key == workpiece_key(workpiece.uid, step.uid)
+    )
+    tab_spec = next(
+        spec
+        for spec in workpiece_node.stage.params.transformers
+        if isinstance(spec, TabsSpec)
+    )
+    assert tab_spec.tab_power == process["tab_power_ratio"]
+    assert tab_spec.original_power == (process["baseline_power_percent"] / 100)
+
+    machine_node_index = next(
+        index
+        for index, node in enumerate(nodes)
+        if node.key == job_machinexform_key()
+    )
+    completed = {}
+    execute_stages(
+        nodes[: machine_node_index + 1],
+        lambda node: completed.__setitem__(node.key, node),
+    )
+    machine_node = completed[job_machinexform_key()]
+    assert machine_node.error is None, machine_node.error
+    ops = machine_node.output.ops
+    power_states = [
+        ops.power(index)
+        for index in range(ops.len())
+        if ops.command_type(index) == CommandType.SET_POWER
+    ]
+    assert power_states == pytest.approx([0.15, 0.05, 0.15])
+
+    regenerated = RuidaEncoder.from_machine(machine).encode(
+        ops,
+        machine,
+        doc,
+    )
+    filename, _ = DYNAMIC_ARTIFACTS[identifier]
+    assert regenerated.payload == (DYNAMIC_FIXTURE / filename).read_bytes()
+
+
 def test_dynamic_hardware_receipts_and_observations_are_bounded() -> None:
     first = _dynamic_job("dynamic-vector-15-10-15-v1")
     second = _dynamic_job("dynamic-vector-15-5-15-v2")
+    restored = _dynamic_job("dynamic-vector-15-5-15-restore-v3")
 
-    for job in (first, second):
+    for job in (first, second, restored):
         assert job["transmission"]["host_log"] == {
             "scope": "host-side driver transfer summary",
             "packets": 1,
@@ -726,8 +973,29 @@ def test_dynamic_hardware_receipts_and_observations_are_bounded() -> None:
     assert second["result"]["power_state_persistence_evidence"] == (
         "operator-observation-consistent"
     )
+    assert restored["operator_observation"]["reported_verbatim"] == [
+        "Perfect. A ~30mm line, a gap, and a ~30mm line"
+    ]
+    assert restored["result"]["explicit_baseline_restore_evidence"] == (
+        "operator-observed"
+    )
+    assert restored["result"]["exact_restore_subset_evidence"] == (
+        "operator-observed"
+    )
+    assert restored["result"]["broad_dynamic_profile_evidence"] == (
+        "research-only"
+    )
+    assert restored["result"]["other_combinations_evidence"] == ("unvalidated")
+    assert (
+        restored["transmission"]["artifact_sha256"]
+        == (restored["artifact"]["sha256"])
+    )
     conclusion = _dynamic_manifest()["conclusion"]
-    assert conclusion["required_encoder_change"] == (
+    assert conclusion["implemented_encoder_change"] == (
         "Emit an explicit layer-baseline power envelope before a normal "
         "baseline mark that follows a reduced-power mark."
+    )
+    assert (
+        "broad dynamic-power profile remains research-only"
+        in (conclusion["validation_required"])
     )

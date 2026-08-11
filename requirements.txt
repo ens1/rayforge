@@ -1,5 +1,5 @@
 raygeo @ git+https://github.com/ens1/raygeo.git@5663bec8c5d47ebb7f3f09d6df0658f5bdac8583
-ruida-re @ git+https://github.com/ens1/ruida-re.git@a97a8f4e13fb8da39bc8f009a2de310ab26a478b ; python_version >= "3.11"
+ruida-re @ git+https://github.com/ens1/ruida-re.git@11ad58be14c2dde52b2a589c81c498bbd2fd4e20 ; python_version >= "3.11"
 aiohttp==3.14.3
 asyncudp==0.11.0
 blinker==1.9.0

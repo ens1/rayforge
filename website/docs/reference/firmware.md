@@ -491,10 +491,11 @@ profile is based on LightBurn 2.1.03 output for a Ruida 644XS controller.
 The advanced profiles described below remain evidence-limited and intended
 for research. Narrow `planned-path-research` coupons have limited hardware
 motion and marking observations. Two `dynamic-power-research` coupons exposed
-a missing baseline restoration in the executed payloads; the corrected
-restoration sequence has offline evidence only. Every other accepted
-planned-path combination and all remaining research profiles have offline
-producer-fixture evidence only.
+a missing baseline restoration in the executed payloads. One corrected exact
+restore subset is now operator-observed, but the broad profile remains
+research-only and every other dynamic-power combination is unvalidated. Every
+other accepted planned-path combination and all remaining research profiles
+have offline producer-fixture evidence only.
 Keep the `proven` profile selected unless you are intentionally evaluating one
 narrow research capability.
 :::
@@ -552,7 +553,7 @@ that scope. The profiles cannot be combined.
 | `rf-research` | One vector layer with RF frequency from 10,000 through 20,000 Hz. |
 | `fiber-research` | One vector layer on a fiber head with pulse width from 0 through 0.2 µs, encoded as 0 through 200 ns. |
 | `z-research` | One native raster layer with a nonzero typed logical layer Z offset no greater than 1 mm in either direction. The compiler emits a balanced relative envelope and still requires all motion endpoints at Z=0. |
-| `dynamic-power-research` | One head-1 vector layer whose tab transform produces reduced positive marking power. A normal mark after a reduced span requires an explicit baseline-power restoration from a restoration-capable compiler. It does not provide general speed-dependent or raster dynamic power. |
+| `dynamic-power-research` | One vector layer with Rayforge head-1 intent whose tab transform produces reduced positive marking power. A normal mark after a reduced span requires an explicit baseline-power restoration from a restoration-capable compiler. One exact restore subset is operator-observed; the broad profile remains research-only and other combinations are unvalidated. It does not provide general speed-dependent or raster dynamic power. |
 
 The planned-path observations used the same operator-identified Boss LS2040
 and USB serial transport. A direct 10% coupon produced the expected five
@@ -579,9 +580,10 @@ air-assist state was not independently observed.
 
 ##### Dynamic-vector power observations
 
-Two Rayforge-generated, one-layer head-1 vector coupons were transferred to
-the same Boss LS2040 over USB serial at 100 mm/s. The first contained planned
-spans of 12 mm at 15%, 6 mm at 10%, and 12 mm at 15%. The operator reported,
+Three Rayforge-generated, one-layer vector coupons with Rayforge head-1 intent
+were transferred to the same Boss LS2040 over USB serial at 100 mm/s. The first
+contained planned spans of 12 mm at 15%, 6 mm at 10%, and 12 mm at 15%. The
+operator reported,
 "It looks pretty solid. Maybe go longer and vary more." That observation did
 not distinguish the middle span and did not establish that power changed or
 returned to its baseline value.
@@ -595,19 +597,25 @@ remaining active, leaving both later spans below the cardboard's visible
 marking threshold. It does not establish zero optical output or calibrated
 power at any percentage.
 
-Both host-side transfer summaries reported one packet and zero retries. They
-provided no controller acknowledgement or execution-completion status. The
-observations provide no dimensional, timing, optical-power, electrical, or
-laser-channel-routing metrology. They also do not validate other powers,
-speeds, geometry, multiple reduced spans, additional heads, or combinations
-with another research capability.
-
 Rayforge now requires a `ruida-re` compiler that advertises dynamic restoration
 contract 1. That compiler emits an explicit layer-baseline power envelope
 before an ordinary baseline mark that follows a reduced-power mark. Rayforge
 rejects the dynamic job before controller I/O when that contract is absent.
-The corrected sequence has offline tests only and remains hardware-unvalidated;
-the profile is still research-only and is not eligible for default promotion.
+
+The third coupon used the same planned 30 mm spans at 15%, 5%, and 15%, with
+the corrected explicit restore envelope before the trailing mark. The operator
+reported, "Perfect. A ~30mm line, a gap, and a ~30mm line." This is
+operator-observed evidence for that exact restore subset on one machine. The
+approximate visual report is not dimensional metrology and does not establish
+calibrated power or zero optical output in the gap.
+
+All three host-side transfer summaries reported one packet and zero retries.
+They provided no controller acknowledgement or execution-completion status.
+The observations provide no dimensional, timing, optical-power, electrical,
+or laser-channel-routing metrology. The broad dynamic-power profile remains
+research-only and is not eligible for default promotion. Other powers, speeds,
+geometry, multiple reduced spans, additional heads, controllers, transports,
+or combinations with another research capability remain unvalidated.
 
 The following remain unsupported for every profile:
 

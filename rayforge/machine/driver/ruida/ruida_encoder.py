@@ -355,7 +355,7 @@ def ruida_job_profile_vars() -> list[Any]:
         ),
         (
             f"{limited_research}: "
-            + _("dynamic vector power; corrected restoration offline-only"),
+            + _("dynamic vector power; one restore subset operator-observed"),
             "dynamic-power-research",
         ),
     ]
@@ -367,9 +367,9 @@ def ruida_job_profile_vars() -> list[Any]:
             description=_(
                 "Advanced profiles are evidence-limited; planned-path has "
                 "narrow positive hardware observations, dynamic power has "
-                "hardware observations that exposed missing restoration, "
-                "and the corrected sequence plus the remaining profiles are "
-                "offline-only"
+                "one exact operator-observed restore subset, but its broad "
+                "profile remains research-only and other combinations are "
+                "unvalidated; the remaining profiles are offline-only"
             ),
             default=DEFAULT_RUIDA_JOB_PROFILE,
             allow_none=False,
@@ -1146,14 +1146,17 @@ class RuidaOpsAdapter:
             self.warnings.append(
                 _(
                     "The selected Ruida dynamic-power research profile has "
-                    "limited hardware evidence from two one-layer vector "
+                    "limited hardware evidence from three one-layer vector "
                     "coupons on a Boss LS2040 at 100 mm/s. A coupon planned "
                     "as 15%-10%-15% looked solid; one planned as 15%-5%-15% "
                     "visibly marked only its first 30 mm. The latter payload "
                     "omitted baseline restoration after its reduced span. "
-                    "Rayforge now requires explicit restoration support, "
-                    "but the corrected sequence has offline evidence only "
-                    "and remains hardware-unvalidated"
+                    "A corrected 15%-5%-15% coupon with explicit restoration "
+                    "produced the operator-reported result 'a ~30mm line, a "
+                    "gap, and a ~30mm line.' This establishes only that exact "
+                    "restore subset, not calibrated power or zero output. "
+                    "The broad profile remains research-only and every other "
+                    "dynamic-power combination is unvalidated"
                 )
             )
         elif self.profile_name != DEFAULT_RUIDA_JOB_PROFILE:
