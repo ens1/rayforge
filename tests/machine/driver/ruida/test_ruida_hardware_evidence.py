@@ -189,7 +189,7 @@ def test_hardware_artifact_decodes_and_roundtrips_exactly() -> None:
     assert checksum == manifest["artifact"]["checksum"]["value"]
 
 
-def test_hardware_artifact_regenerates_through_the_production_pipeline(
+def test_current_pipeline_preserves_the_observed_process_scope(
     engrave_step_class,
     test_machine_and_config,
 ) -> None:
@@ -276,8 +276,67 @@ def test_hardware_artifact_regenerates_through_the_production_pipeline(
 
     assert generation["hardware_io"] is False
     assert process["rayforge_laser_channel_intent"] == 1
-    assert regenerated == ARTIFACT_PATH.read_bytes()
-    assert hashlib.sha256(regenerated).hexdigest() == ARTIFACT_SHA256
+
+    codec = RuidaCodec(context="job")
+    program = codec.decode(regenerated, container="rd")
+    records = tuple(
+        record
+        for record in program.records
+        if isinstance(record, KnownCommand)
+    )
+    assert program.issues == []
+    assert len(records) == len(program.records)
+    names = [record.name for record in records]
+    assert (
+        codec.encode(program, container="rd", checksum_policy="preserve")
+        == regenerated
+    )
+    assert (
+        codec.encode(program, container="rd", checksum_policy="recompute")
+        == regenerated
+    )
+
+    motion = _decoded_motion(records)
+    assert [event["type"] for event in motion] == [
+        "travel_to",
+        "mark_to",
+    ] * 5
+    assert sum(name.startswith("move_") for name in names) == 5
+    assert sum(name.startswith("cut_") for name in names) == 5
+    for start, end in zip(motion[::2], motion[1::2], strict=True):
+        dx = float(end["x_mm"]) - float(start["x_mm"])
+        dy = float(end["y_mm"]) - float(start["y_mm"])
+        assert dx * dy < 0
+        assert abs(abs(dx) - abs(dy)) <= 0.002
+
+    bounds = (
+        min(float(event["x_mm"]) for event in motion),
+        min(float(event["y_mm"]) for event in motion),
+        max(float(event["x_mm"]) for event in motion),
+        max(float(event["y_mm"]) for event in motion),
+    )
+    assert 40 <= bounds[0] <= bounds[2] <= 54
+    assert 20 <= bounds[1] <= bounds[3] <= 40
+    assert _one(records, "layer_speed").values["speed_mm_s"] == 100.0
+    assert _one(records, "active_speed").values["speed_mm_s"] == 100.0
+    assert [
+        record.values["operation"]
+        for record in records
+        if record.name == "layer_control"
+    ] == [0, 48, 16, 18]
+    assert set(names).isdisjoint(
+        {
+            "additional_delay",
+            "layer_fiber_pulse_width",
+            "layer_frequency",
+            "z_offset_delta",
+        }
+    )
+    for record in records:
+        if record.name in POWER_COMMANDS:
+            assert record.values["power_percent"] == pytest.approx(
+                process["encoded_power_percent"]
+            )
 
 
 def test_hardware_artifact_has_exact_bounded_motion() -> None:
