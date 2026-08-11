@@ -1,6 +1,7 @@
 """Tests for the Rayforge-to-ruida-re job adapter."""
 
 import json
+from dataclasses import replace
 from typing import Any
 
 import cairo
@@ -25,6 +26,7 @@ from ruida_re import (
 
 from rayforge.core.doc import Doc
 from rayforge.core.step_registry import step_registry
+from rayforge.core.tab import Tab
 from rayforge.core.workpiece import WorkPiece
 from rayforge.machine.driver.ruida.ruida_encoder import (
     RuidaEncoder,
@@ -40,6 +42,7 @@ from rayforge.pipeline.intent_builder import (
     IntentBuilder,
     job_encode_key,
     job_machinexform_key,
+    workpiece_key,
 )
 
 
@@ -1477,6 +1480,38 @@ def test_planned_path_preserves_ops_raster_section_boundaries(machine, doc):
     )
 
 
+def test_dynamic_power_profile_wording_reports_hardware_scope(machine):
+    _select_research_profile(machine, "dynamic-power-research")
+
+    adapter = RuidaOpsAdapter(machine, "dynamic-power-research")
+    assert adapter.warnings == [
+        (
+            "The selected Ruida dynamic-power research profile has limited "
+            "hardware evidence from two one-layer vector coupons on a Boss "
+            "LS2040 at 100 mm/s. A coupon planned as 15%-10%-15% looked "
+            "solid; one planned as 15%-5%-15% visibly marked only its first "
+            "30 mm. The latter payload omitted baseline restoration after "
+            "its reduced span. Rayforge now requires explicit restoration "
+            "support, but the corrected sequence has offline evidence only "
+            "and remains hardware-unvalidated"
+        )
+    ]
+
+    profile_var = next(
+        var for var in ruida_job_profile_vars() if var.key == "job_profile"
+    )
+    assert profile_var.get_display_for_value("dynamic-power-research") == (
+        "Research; limited hardware evidence: dynamic vector power; "
+        "corrected restoration offline-only"
+    )
+    assert profile_var.description == (
+        "Advanced profiles are evidence-limited; planned-path has narrow "
+        "positive hardware observations, dynamic power has hardware "
+        "observations that exposed missing restoration, and the corrected "
+        "sequence plus the remaining profiles are offline-only"
+    )
+
+
 @pytest.mark.parametrize(
     ("cross_hatch", "expected_slope_signs"),
     ((False, 1), (True, 2)),
@@ -1954,6 +1989,168 @@ def test_dynamic_tab_power_emits_power_events_without_deduping(machine, doc):
         doc,
     )
     assert result.payload
+
+
+def test_contour_tabs_restore_baseline_power_before_following_mark(
+    contour_step_class,
+    test_machine_and_config,
+):
+    machine, context = test_machine_and_config
+    machine.hydrate()
+    machine.driver_name = RuidaSerialDriver.__name__
+    machine.set_dialect_uid(None)
+    _select_research_profile(machine, "dynamic-power-research")
+    step = contour_step_class.create(context, name="Dynamic power tabs")
+    step.set_power(0.8)
+    step.set_tab_power(0.25)
+
+    geometry = Geometry()
+    geometry.move_to(0, 0)
+    geometry.line_to(1, 0)
+    workpiece = WorkPiece(name="tabbed line")
+    workpiece._edited_boundaries = geometry
+    workpiece.set_size(10, 1)
+    workpiece.pos = (20, 20)
+    workpiece.tabs = [Tab(width=2, segment_index=1, pos=0.5)]
+    doc = Doc()
+    workflow = doc.active_layer.workflow
+    assert workflow is not None
+    workflow.add_child(step)
+    doc.active_layer.add_child(workpiece)
+
+    nodes = IntentBuilder(machine=machine, generation_id=1).build(doc)
+    workpiece_node = next(
+        node
+        for node in nodes
+        if node.key == workpiece_key(workpiece.uid, step.uid)
+    )
+    tab_spec = next(
+        spec
+        for spec in workpiece_node.stage.params.transformers
+        if isinstance(spec, TabsSpec)
+    )
+    assert tab_spec.tab_power == pytest.approx(0.25)
+    assert tab_spec.original_power == pytest.approx(0.8)
+    assert list(tab_spec.clips) == [(5.0, 0.0, 2.0)]
+
+    completed = {}
+    execute_stages(
+        nodes,
+        lambda node: completed.__setitem__(node.key, node),
+    )
+    machine_node = completed[job_machinexform_key()]
+    encode_node = completed[job_encode_key()]
+    assert machine_node.error is None, machine_node.error
+    assert encode_node.error is None, encode_node.error
+    ops = machine_node.output.ops
+    power_states = [
+        ops.power(index)
+        for index in range(ops.len())
+        if ops.command_type(index) == CommandType.SET_POWER
+    ]
+    assert power_states == pytest.approx([0.8, 0.2, 0.8])
+
+    plan = RuidaOpsAdapter(
+        machine,
+        "dynamic-power-research",
+    ).build_plan(ops)
+    assert [type(event) for event in plan.layers[0].events] == [
+        TravelTo,
+        MarkTo,
+        MarkWithPower,
+        MarkTo,
+    ]
+
+    records = _records(encode_node.output.payload)
+    names = [record.name for record in records]
+    cut_indices = [
+        index for index, name in enumerate(names) if name.startswith("cut_")
+    ]
+    assert len(cut_indices) == 3
+    envelope_names = [
+        "layer_control",
+        "select_layer",
+        "laser_1_min_power",
+        "laser_1_max_power",
+        "laser_2_min_power",
+        "laser_2_max_power",
+        "external_io",
+    ]
+    reduced_start = cut_indices[1] - len(envelope_names)
+    restore_start = cut_indices[2] - len(envelope_names)
+    assert names[reduced_start : cut_indices[1]] == envelope_names
+    assert names[restore_start : cut_indices[2]] == envelope_names
+    reduced = records[reduced_start : cut_indices[1]]
+    restored = records[restore_start : cut_indices[2]]
+    assert [
+        record.values["power_percent"] for record in reduced[2:6]
+    ] == pytest.approx([20, 20, 40, 40], abs=0.004)
+    assert [
+        record.values["power_percent"] for record in restored[2:6]
+    ] == pytest.approx([20, 80, 40, 40], abs=0.004)
+
+
+@pytest.mark.parametrize("missing_contract", ("snapshot", "api"))
+def test_dynamic_power_requires_restoring_compiler_contract(
+    machine,
+    missing_contract,
+):
+    _select_research_profile(machine, "dynamic-power-research")
+    adapter = RuidaOpsAdapter(machine, "dynamic-power-research")
+    if missing_contract == "snapshot":
+        adapter.config = replace(
+            adapter.config,
+            dynamic_power_restore_contract=None,
+        )
+    else:
+        adapter.api = replace(
+            adapter.api,
+            dynamic_power_restore_contract=None,
+        )
+
+    with pytest.raises(
+        RuidaEncodingError,
+        match="dynamic power restoration contract 1",
+    ):
+        adapter.build_plan(_dynamic_vector_ops(with_tabs=True))
+
+
+def test_dynamic_restore_contract_is_profile_scoped_in_cache_snapshot(
+    machine,
+):
+    proven = RuidaEncoder.token_payload(machine)
+    _select_research_profile(machine, "dynamic-power-research")
+    encoder, dynamic = RuidaEncoder.context_from_machine(machine)
+    machine.driver_args["job_profile"] = "proven"
+
+    assert "dynamic_power_restore_contract" not in proven
+    assert dynamic["job_profile"] == "dynamic-power-research"
+    assert dynamic["dynamic_power_restore_contract"] == 1
+    assert encoder._config is not None
+    assert encoder._config.token_payload() == dynamic
+
+
+def test_zero_power_tabs_remain_travel_in_proven_profile(machine):
+    metadata = _metadata(power=0.8)
+    ops = Ops()
+    _process_start(ops, metadata)
+    _state(ops, metadata)
+    ops.ops_section_start(SectionType.VECTOR_OUTLINE, "workpiece")
+    ops.move_to(0, 0)
+    ops.line_to(10, 0)
+    ops.ops_section_end(SectionType.VECTOR_OUTLINE)
+    _process_end(ops, metadata)
+    ops.apply_transformers([TabsSpec(0, 0.8, [(5.0, 0.0, 2.0)])])
+
+    layer = RuidaOpsAdapter(machine).build_plan(ops).layers[0]
+
+    assert layer.laser_channels is None
+    assert layer.events == (
+        TravelTo(0, 0),
+        MarkTo(4, 0),
+        TravelTo(6, 0),
+        MarkTo(10, 0),
+    )
 
 
 def test_repeated_dynamic_marks_are_not_deduplicated(machine):

@@ -2,4 +2,4 @@ recursive-include rayforge/resources *
 recursive-include rayforge/locale *.mo
 recursive-include rayforge/builtin_addons *.py *.yaml *.po *.pot *.mo *.png *.jpg *.jpeg *.gif *.svg *.ico
 include tests/machine/driver/ruida/test_ruida_hardware_evidence.py
-recursive-include tests/machine/driver/ruida/fixtures/hardware/boss-ls2040-usb-serial-rayforge-planned-path-v1 *.json *.png *.rd
+recursive-include tests/machine/driver/ruida/fixtures/hardware *.json *.png *.rd

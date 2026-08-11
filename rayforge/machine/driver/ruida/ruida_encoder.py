@@ -80,6 +80,7 @@ _PROFILE_EXPORTS = {
 @dataclass(frozen=True)
 class _RuidaEncoderConfig:
     profile_name: str
+    dynamic_power_restore_contract: int | None
     inactive_channel_powers: tuple[
         tuple[float | None, float | None],
         tuple[float | None, float | None],
@@ -88,7 +89,7 @@ class _RuidaEncoderConfig:
     head_mappings: tuple[tuple[str, int, str | None], ...]
 
     def token_payload(self) -> dict[str, Any]:
-        return {
+        payload = {
             RUIDA_JOB_PROFILE_KEY: self.profile_name,
             "inactive_channel_powers_confirmed": {
                 str(index): value
@@ -113,6 +114,11 @@ class _RuidaEncoderConfig:
                 for uid, tool_number, laser_type in self.head_mappings
             ],
         }
+        if self.profile_name == "dynamic-power-research":
+            payload["dynamic_power_restore_contract"] = (
+                self.dynamic_power_restore_contract
+            )
+        return payload
 
     def inactive_power(
         self,
@@ -130,6 +136,7 @@ class RuidaEncodingError(ValueError):
 
 @dataclass(frozen=True)
 class _RuidaApi:
+    dynamic_power_restore_contract: int | None
     Dwell: Any
     JobPlan: Any
     LaserChannelPlan: Any
@@ -175,7 +182,18 @@ def _load_ruida_api() -> _RuidaApi:
         name: getattr(module, export)
         for name, export in _PROFILE_EXPORTS.items()
     }
+    restore_contract = getattr(
+        module,
+        "DYNAMIC_POWER_RESTORE_CONTRACT",
+        None,
+    )
+    if isinstance(restore_contract, bool) or not isinstance(
+        restore_contract,
+        int,
+    ):
+        restore_contract = None
     return _RuidaApi(
+        dynamic_power_restore_contract=restore_contract,
         **{name: getattr(module, name) for name in core_names},
         profiles=profiles,
     )
@@ -283,6 +301,11 @@ def _snapshot_ruida_encoder_config(
     )
     return _RuidaEncoderConfig(
         profile_name=profile_name,
+        dynamic_power_restore_contract=(
+            _load_ruida_api().dynamic_power_restore_contract
+            if profile_name == "dynamic-power-research"
+            else None
+        ),
         inactive_channel_powers=(
             (channel_config["1"][0], channel_config["1"][1]),
             (channel_config["2"][0], channel_config["2"][1]),
@@ -300,12 +323,11 @@ def ruida_job_profile_vars() -> list[Any]:
     from ....core.varset import BoolVar, FloatVar, LabeledChoiceVar
 
     offline_research = _("Offline research; not hardware-validated")
+    limited_research = _("Research; limited hardware evidence")
     choices = [
         (_("Proven LightBurn 2.1.03 / Ruida 644XS"), "proven"),
         (
-            _("Research; limited hardware evidence")
-            + ": "
-            + _("planned-path raster"),
+            f"{limited_research}: " + _("planned-path raster"),
             "planned-path-research",
         ),
         (
@@ -332,7 +354,8 @@ def ruida_job_profile_vars() -> list[Any]:
             "z-research",
         ),
         (
-            f"{offline_research}: " + _("dynamic vector power"),
+            f"{limited_research}: "
+            + _("dynamic vector power; corrected restoration offline-only"),
             "dynamic-power-research",
         ),
     ]
@@ -343,8 +366,10 @@ def ruida_job_profile_vars() -> list[Any]:
             choices=choices,
             description=_(
                 "Advanced profiles are evidence-limited; planned-path has "
-                "narrow motion and marking observations, while all other "
-                "profiles are offline-only"
+                "narrow positive hardware observations, dynamic power has "
+                "hardware observations that exposed missing restoration, "
+                "and the corrected sequence plus the remaining profiles are "
+                "offline-only"
             ),
             default=DEFAULT_RUIDA_JOB_PROFILE,
             allow_none=False,
@@ -1117,6 +1142,20 @@ class RuidaOpsAdapter:
                     "combinations remain unvalidated"
                 )
             )
+        elif self.profile_name == "dynamic-power-research":
+            self.warnings.append(
+                _(
+                    "The selected Ruida dynamic-power research profile has "
+                    "limited hardware evidence from two one-layer vector "
+                    "coupons on a Boss LS2040 at 100 mm/s. A coupon planned "
+                    "as 15%-10%-15% looked solid; one planned as 15%-5%-15% "
+                    "visibly marked only its first 30 mm. The latter payload "
+                    "omitted baseline restoration after its reduced span. "
+                    "Rayforge now requires explicit restoration support, "
+                    "but the corrected sequence has offline evidence only "
+                    "and remains hardware-unvalidated"
+                )
+            )
         elif self.profile_name != DEFAULT_RUIDA_JOB_PROFILE:
             self.warnings.append(
                 _(
@@ -1436,6 +1475,14 @@ class RuidaOpsAdapter:
                 raise RuidaEncodingError(
                     "Reduced positive vector power requires the "
                     "dynamic-power-research job profile"
+                )
+            if (
+                self.config.dynamic_power_restore_contract != 1
+                or self.api.dynamic_power_restore_contract != 1
+            ):
+                raise RuidaEncodingError(
+                    "Reduced positive vector power requires a ruida-re "
+                    "compiler with dynamic power restoration contract 1"
                 )
             builder.uses_dynamic_power = True
             event = self.api.MarkWithPower(

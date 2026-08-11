@@ -8661,7 +8661,7 @@ msgid "logical raster layer Z offset"
 msgstr ""
 
 #: rayforge/machine/driver/ruida/ruida_encoder.py
-msgid "dynamic vector power"
+msgid "dynamic vector power; corrected restoration offline-only"
 msgstr ""
 
 #: rayforge/machine/driver/ruida/ruida_encoder.py
@@ -8670,8 +8670,10 @@ msgstr ""
 
 #: rayforge/machine/driver/ruida/ruida_encoder.py
 msgid ""
-"Advanced profiles are evidence-limited; planned-path has narrow motion and "
-"marking observations, while all other profiles are offline-only"
+"Advanced profiles are evidence-limited; planned-path has narrow positive "
+"hardware observations, dynamic power has hardware observations that exposed "
+"missing restoration, and the corrected sequence plus the remaining profiles "
+"are offline-only"
 msgstr ""
 
 #: rayforge/machine/driver/ruida/ruida_encoder.py
@@ -8711,6 +8713,17 @@ msgid ""
 "over USB serial: motion without visible marks at 10%, and visible marks at "
 "15%, including one job generated end to end by Rayforge. All ran at 100 mm/"
 "s; other accepted combinations remain unvalidated"
+msgstr ""
+
+#: rayforge/machine/driver/ruida/ruida_encoder.py
+msgid ""
+"The selected Ruida dynamic-power research profile has limited hardware "
+"evidence from two one-layer vector coupons on a Boss LS2040 at 100 mm/s. A "
+"coupon planned as 15%-10%-15% looked solid; one planned as 15%-5%-15% visibly "
+"marked only its first 30 mm. The latter payload omitted baseline restoration "
+"after its reduced span. Rayforge now requires explicit restoration support, "
+"but the corrected sequence has offline evidence only and remains hardware-"
+"unvalidated"
 msgstr ""
 
 #: rayforge/machine/driver/ruida/ruida_encoder.py

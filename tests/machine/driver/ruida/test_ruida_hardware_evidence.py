@@ -35,6 +35,21 @@ ARTIFACT_SHA256 = (
 SOURCE_SHA256 = (
     "1edc07dc386bc3a3cd109fb1154b3bc202cbdd4254d256c3f9116c379ed4eb96"
 )
+DYNAMIC_FIXTURE = (
+    Path(__file__).parent
+    / "fixtures/hardware/boss-ls2040-usb-serial-rayforge-dynamic-vector-v1"
+)
+DYNAMIC_MANIFEST_PATH = DYNAMIC_FIXTURE / "manifest-v1.json"
+DYNAMIC_ARTIFACTS = {
+    "dynamic-vector-15-10-15-v1": (
+        "boss-ls2040-dynamic-vector-tab-15-10pct-v1.rd",
+        "ec6a24b47bac882e62fa3ac996727e3b452b81b7717e3137a38809501d851809",
+    ),
+    "dynamic-vector-15-5-15-v2": (
+        "boss-ls2040-dynamic-15-5-15-v2.rd",
+        "723f5f8de65db05717ac95d9c7d11774dab9af558338c4b8daa486afb95f129b",
+    ),
+}
 POWER_COMMANDS = {
     "layer_laser_1_min_power",
     "layer_laser_1_max_power",
@@ -62,6 +77,34 @@ def _program() -> tuple[Any, tuple[KnownCommand, ...]]:
         if isinstance(record, KnownCommand)
     )
     return program, known
+
+
+def _dynamic_manifest() -> dict[str, Any]:
+    return json.loads(DYNAMIC_MANIFEST_PATH.read_text(encoding="utf-8"))
+
+
+def _dynamic_job(identifier: str) -> dict[str, Any]:
+    matches = [
+        job
+        for job in _dynamic_manifest()["jobs"]
+        if job["identifier"] == identifier
+    ]
+    assert len(matches) == 1
+    return matches[0]
+
+
+def _dynamic_program(
+    identifier: str,
+) -> tuple[bytes, Any, tuple[KnownCommand, ...]]:
+    filename, _ = DYNAMIC_ARTIFACTS[identifier]
+    payload = (DYNAMIC_FIXTURE / filename).read_bytes()
+    program = RuidaCodec(context="job").decode(payload, container="rd")
+    known = tuple(
+        record
+        for record in program.records
+        if isinstance(record, KnownCommand)
+    )
+    return payload, program, known
 
 
 def _one(
@@ -479,4 +522,212 @@ def test_hardware_receipt_and_observation_have_bounded_meaning() -> None:
     assert observation["status"] == "operator-reported-five-lines"
     assert manifest["result"]["scoped_execution_evidence"] == (
         "operator-observed"
+    )
+
+
+def test_dynamic_hardware_evidence_is_content_addressed_and_sanitized() -> (
+    None
+):
+    manifest = _dynamic_manifest()
+
+    assert manifest["schema"] == (
+        "rayforge.hardware-ruida-dynamic-vector-observation.v1"
+    )
+    assert manifest["generating_revisions"] == {
+        "rayforge": "b288e1960419ce1b14642ab4ead8ac8f6a08b92d",
+        "raygeo": "5663bec8c5d47ebb7f3f09d6df0658f5bdac8583",
+        "ruida_re": "7ef0ff5011bd0684a2a70cb72c43e666f9438651",
+    }
+    assert manifest["scope"]["recipe_content_addressed"] is False
+    assert len(manifest["jobs"]) == len(DYNAMIC_ARTIFACTS) == 2
+
+    for identifier, (filename, expected_sha256) in DYNAMIC_ARTIFACTS.items():
+        artifact = (DYNAMIC_FIXTURE / filename).read_bytes()
+        job = _dynamic_job(identifier)
+        assert job["artifact"]["file"] == filename
+        assert len(artifact) == job["artifact"]["size_bytes"] == 539
+        assert hashlib.sha256(artifact).hexdigest() == expected_sha256
+        assert job["artifact"]["sha256"] == expected_sha256
+
+    serialized = json.dumps(manifest).lower()
+    for private_path in (
+        "/dev/",
+        "/tmp/",
+        "/private/",
+        "/users/",
+        "cu.usb",
+        "tty.usb",
+        "usbserial",
+        "usbmodem",
+    ):
+        assert private_path not in serialized
+
+
+@pytest.mark.parametrize("identifier", tuple(DYNAMIC_ARTIFACTS))
+def test_dynamic_hardware_artifacts_decode_and_roundtrip_exactly(
+    identifier: str,
+) -> None:
+    payload, program, records = _dynamic_program(identifier)
+    artifact = _dynamic_job(identifier)["artifact"]
+    codec = RuidaCodec(context="job")
+
+    assert program.issues == artifact["issues"] == []
+    assert len(program.records) == artifact["records"] == 79
+    assert len(records) == artifact["known_records"] == 79
+    assert artifact["opaque_records"] == 0
+    assert (
+        codec.encode(
+            program,
+            container="rd",
+            checksum_policy="preserve",
+        )
+        == payload
+    )
+    assert (
+        codec.encode(
+            program,
+            container="rd",
+            checksum_policy="recompute",
+        )
+        == payload
+    )
+    checksum = _one(records, "file_checksum").values["value"]
+    assert checksum == program.source_checksum_basis
+    assert checksum == artifact["checksum"]
+
+
+@pytest.mark.parametrize(
+    ("identifier", "expected_motion", "span_lengths"),
+    (
+        (
+            "dynamic-vector-15-10-15-v1",
+            [(100.0, 56.0), (88.0, 56.0), (82.0, 56.0), (70.0, 56.0)],
+            [12.0, 6.0, 12.0],
+        ),
+        (
+            "dynamic-vector-15-5-15-v2",
+            [(30.0, 75.0), (60.0, 75.0), (90.0, 75.0), (120.0, 75.0)],
+            [30.0, 30.0, 30.0],
+        ),
+    ),
+)
+def test_dynamic_hardware_artifacts_capture_the_missing_restore(
+    identifier: str,
+    expected_motion: list[tuple[float, float]],
+    span_lengths: list[float],
+) -> None:
+    _, _, records = _dynamic_program(identifier)
+    job = _dynamic_job(identifier)
+    names = [record.name for record in records]
+    motion = _decoded_motion(records)
+
+    assert [
+        (float(event["x_mm"]), float(event["y_mm"])) for event in motion
+    ] == expected_motion
+    assert [
+        abs(expected_motion[index + 1][0] - expected_motion[index][0])
+        for index in range(3)
+    ] == span_lengths
+    assert [
+        record.values["operation"]
+        for record in records
+        if record.name == "layer_control"
+    ] == [0, 48, 16, 18, 5]
+
+    middle_cut_index = max(
+        index
+        for index, record in enumerate(records)
+        if record.name == "cut_absolute"
+        and record.values["x_mm"] == expected_motion[2][0]
+    )
+    assert names[middle_cut_index - 7 : middle_cut_index] == [
+        "layer_control",
+        "select_layer",
+        "laser_1_min_power",
+        "laser_1_max_power",
+        "laser_2_min_power",
+        "laser_2_max_power",
+        "external_io",
+    ]
+    assert records[middle_cut_index - 7].values == {"operation": 5}
+    assert names[middle_cut_index + 1] == "cut_absolute"
+    assert job["dynamic_envelope"]["explicit_baseline_restore_records"] == 0
+
+    process = job["process"]
+    layer_powers = {
+        record.name: record.values["power_percent"]
+        for record in records
+        if record.name.startswith("layer_laser_")
+    }
+    assert layer_powers == pytest.approx(
+        {
+            "layer_laser_1_min_power": process["layer_laser_1_power_percent"][
+                "minimum"
+            ],
+            "layer_laser_1_max_power": process["layer_laser_1_power_percent"][
+                "maximum"
+            ],
+            "layer_laser_2_min_power": process[
+                "inactive_laser_2_power_percent"
+            ]["minimum"],
+            "layer_laser_2_max_power": process[
+                "inactive_laser_2_power_percent"
+            ]["maximum"],
+        }
+    )
+    dynamic_powers = [
+        record.values["power_percent"]
+        for record in records[middle_cut_index - 5 : middle_cut_index - 1]
+    ]
+    assert dynamic_powers == pytest.approx(
+        [
+            process["reduced_laser_1_power_percent"]["minimum"],
+            process["reduced_laser_1_power_percent"]["maximum"],
+            process["inactive_laser_2_power_percent"]["minimum"],
+            process["inactive_laser_2_power_percent"]["maximum"],
+        ]
+    )
+    assert set(names).isdisjoint(
+        {
+            "additional_delay",
+            "layer_fiber_pulse_width",
+            "layer_frequency",
+            "laser_interval",
+            "z_offset_delta",
+        }
+    )
+
+
+def test_dynamic_hardware_receipts_and_observations_are_bounded() -> None:
+    first = _dynamic_job("dynamic-vector-15-10-15-v1")
+    second = _dynamic_job("dynamic-vector-15-5-15-v2")
+
+    for job in (first, second):
+        assert job["transmission"]["host_log"] == {
+            "scope": "host-side driver transfer summary",
+            "packets": 1,
+            "retries": 0,
+            "controller_acknowledgement": False,
+            "execution_acknowledgement": False,
+        }
+        assert job["transmission"]["explicit_operator_approval"] is True
+
+    assert first["operator_observation"]["reported_verbatim"] == [
+        "It looks pretty solid. Maybe go longer and vary more"
+    ]
+    assert first["result"]["dynamic_power_effect_evidence"] == ("inconclusive")
+    assert second["operator_observation"]["reported_verbatim"] == [
+        "Motion was good, first 30mm was good, no second 30mm",
+        "only the first 30mm",
+    ]
+    assert second["result"]["automatic_baseline_restore_evidence"] == (
+        "contradicted"
+    )
+    assert second["result"]["power_state_persistence_evidence"] == (
+        "operator-observation-consistent"
+    )
+    conclusion = _dynamic_manifest()["conclusion"]
+    assert conclusion["required_encoder_change"] == (
+        "Emit an explicit layer-baseline power envelope before a normal "
+        "baseline mark that follows a reduced-power mark."
     )
