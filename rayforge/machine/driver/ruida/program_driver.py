@@ -31,6 +31,7 @@ from .ruida_encoder import (
     RuidaEncoder,
     RuidaEncodingError,
     ruida_pwm_params,
+    validate_ruida_program_bounds,
 )
 
 if TYPE_CHECKING:
@@ -265,6 +266,11 @@ class RuidaProgramDriver(Driver):
     ) -> None:
         del doc, ops
         program = self._decode_payload(encoded.payload)
+        try:
+            validate_ruida_program_bounds(program, self._machine)
+        except RuidaEncodingError as error:
+            message = _("Unsafe Ruida job rejected: {error}")
+            raise DeviceConnectionError(message.format(error=error)) from error
         if self._program_active:
             raise DeviceConnectionError(
                 _("A Ruida program transfer is already in progress.")

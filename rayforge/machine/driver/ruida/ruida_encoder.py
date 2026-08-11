@@ -82,6 +82,7 @@ _PROFILE_EXPORTS = {
 @dataclass(frozen=True)
 class _RuidaEncoderConfig:
     profile_name: str
+    machine_xy_extents_mm: tuple[float, float]
     dynamic_power_restore_contract: int | None
     inactive_channel_powers: tuple[
         tuple[float | None, float | None],
@@ -93,6 +94,7 @@ class _RuidaEncoderConfig:
     def token_payload(self) -> dict[str, Any]:
         payload = {
             RUIDA_JOB_PROFILE_KEY: self.profile_name,
+            "machine_xy_extents_mm": list(self.machine_xy_extents_mm),
             "inactive_channel_powers_confirmed": {
                 str(index): value
                 for index, value in enumerate(
@@ -303,6 +305,7 @@ def _snapshot_ruida_encoder_config(
     )
     return _RuidaEncoderConfig(
         profile_name=profile_name,
+        machine_xy_extents_mm=ruida_machine_xy_extents(machine),
         dynamic_power_restore_contract=(
             _load_ruida_api().dynamic_power_restore_contract
             if profile_name == "dynamic-power-research"
@@ -648,6 +651,137 @@ def _finite_number(value: object, label: str) -> float:
     if not math.isfinite(result):
         raise RuidaEncodingError(f"{label} must be a finite number")
     return result
+
+
+def ruida_machine_xy_extents(machine: Machine) -> tuple[float, float]:
+    """Return validated controller-space Ruida XY extents."""
+    extents = getattr(machine, "axis_extents", None)
+    if not isinstance(extents, (tuple, list)) or len(extents) != 2:
+        raise RuidaEncodingError(
+            "Ruida jobs require configured machine X and Y extents"
+        )
+    width = _finite_number(extents[0], "machine X extent")
+    height = _finite_number(extents[1], "machine Y extent")
+    if width <= 0 or height <= 0:
+        raise RuidaEncodingError(
+            "Ruida machine X and Y extents must be positive"
+        )
+    return width, height
+
+
+def _format_coordinate(value: float) -> str:
+    return f"{value:.12g}"
+
+
+def _validate_ruida_xy(
+    x: float,
+    y: float,
+    extents: tuple[float, float],
+) -> None:
+    width, height = extents
+    for axis, coordinate, maximum in (
+        ("X", x, width),
+        ("Y", y, height),
+    ):
+        if 0 <= coordinate <= maximum:
+            continue
+        raise RuidaEncodingError(
+            f"Ruida motion {axis} coordinate "
+            f"{_format_coordinate(coordinate)} mm is outside configured "
+            f"controller bounds 0..{_format_coordinate(maximum)} mm; "
+            "move the job inside the machine area"
+        )
+
+
+def _record_number(record: Any, key: str) -> float:
+    values = getattr(record, "values", None)
+    if not isinstance(values, dict):
+        raise RuidaEncodingError(
+            "Decoded Ruida motion command has invalid fields"
+        )
+    return _finite_number(values.get(key), f"decoded Ruida {key}")
+
+
+def validate_ruida_program_bounds(
+    program: Any,
+    machine: Machine,
+) -> tuple[float, float, float, float]:
+    """Validate decoded generated-job motion against current XY extents."""
+    extents = ruida_machine_xy_extents(machine)
+    position: tuple[float, float] | None = None
+    points: list[tuple[float, float]] = []
+    absolute = {"move_absolute", "cut_absolute"}
+    relative = {"move_relative", "cut_relative"}
+    horizontal = {"move_horizontal", "cut_horizontal"}
+    vertical = {"move_vertical", "cut_vertical"}
+    unsupported_xy = {
+        "move_far_x",
+        "move_far_y_reported",
+        "direct_move_x",
+        "direct_move_y",
+        "direct_move_xy",
+        "direct_move_xyu",
+    }
+    records = getattr(program, "records", None)
+    if not isinstance(records, (tuple, list)):
+        raise RuidaEncodingError("Decoded Ruida program has no record list")
+    for record in records:
+        name = getattr(record, "name", None)
+        if name in unsupported_xy:
+            raise RuidaEncodingError(
+                f"Decoded Ruida program contains unsupported XY motion "
+                f"command {name!r}; regenerate the job in Rayforge"
+            )
+        if name in absolute:
+            position = (
+                _record_number(record, "x_mm"),
+                _record_number(record, "y_mm"),
+            )
+        elif name in relative:
+            if position is None:
+                raise RuidaEncodingError(
+                    "Decoded Ruida relative motion has no absolute starting "
+                    "position; regenerate the job in Rayforge"
+                )
+            position = (
+                position[0] + _record_number(record, "dx_mm"),
+                position[1] + _record_number(record, "dy_mm"),
+            )
+        elif name in horizontal:
+            if position is None:
+                raise RuidaEncodingError(
+                    "Decoded Ruida horizontal motion has no absolute "
+                    "starting position; regenerate the job in Rayforge"
+                )
+            position = (
+                position[0] + _record_number(record, "dx_mm"),
+                position[1],
+            )
+        elif name in vertical:
+            if position is None:
+                raise RuidaEncodingError(
+                    "Decoded Ruida vertical motion has no absolute starting "
+                    "position; regenerate the job in Rayforge"
+                )
+            position = (
+                position[0],
+                position[1] + _record_number(record, "dy_mm"),
+            )
+        else:
+            continue
+        _validate_ruida_xy(position[0], position[1], extents)
+        points.append(position)
+    if not points:
+        raise RuidaEncodingError(
+            "Decoded Ruida program contains no supported XY motion; "
+            "regenerate the job in Rayforge"
+        )
+    return (
+        min(point[0] for point in points),
+        min(point[1] for point in points),
+        max(point[0] for point in points),
+        max(point[1] for point in points),
+    )
 
 
 def _optional_number(value: object, label: str) -> float | None:
@@ -1128,6 +1262,7 @@ class RuidaOpsAdapter:
         )
         self.profile_name = self.config.profile_name
         self.profile = self.api.profiles[self.profile_name]
+        self.machine_xy_extents_mm = self.config.machine_xy_extents_mm
         self.state = _MachineState()
         self.current_pos: tuple[float, float, float] | None = None
         self.pending_travels: list[Any] = []
@@ -1700,6 +1835,7 @@ class RuidaOpsAdapter:
             raise RuidaEncodingError(
                 "Ruida job compiler does not support extra-axis motion"
             )
+        _validate_ruida_xy(values[0], values[1], self.machine_xy_extents_mm)
         return values
 
     def _require_position(self) -> tuple[float, float, float]:
@@ -2590,9 +2726,14 @@ class RuidaEncoder(OpsEncoder):
         result = adapter.api.RuidaJobCompiler(
             profile=adapter.profile,
         ).compile(plan)
+        bounds = result.bounds
+        for x, y in (
+            (bounds.min_x_mm, bounds.min_y_mm),
+            (bounds.max_x_mm, bounds.max_y_mm),
+        ):
+            _validate_ruida_xy(x, y, config.machine_xy_extents_mm)
         payload = result.encode_rd()
         text, op_map = self._display(ops, result)
-        bounds = result.bounds
         return EncodedOutput(
             text=text,
             op_map=op_map,
@@ -2606,6 +2747,7 @@ class RuidaEncoder(OpsEncoder):
                     bounds.max_x_mm,
                     bounds.max_y_mm,
                 ),
+                "machine_xy_extents_mm": config.machine_xy_extents_mm,
                 "layer_count": len(plan.layers),
             },
             payload=payload,

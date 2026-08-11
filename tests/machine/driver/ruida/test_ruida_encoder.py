@@ -38,6 +38,7 @@ from rayforge.machine.driver.ruida.ruida_serial_driver import (
     RuidaSerialDriver,
 )
 from rayforge.machine.models.laser import Laser, LaserType
+from rayforge.machine.models.machine import Origin
 from rayforge.pipeline.intent_builder import (
     IntentBuilder,
     job_encode_key,
@@ -284,6 +285,122 @@ def test_encoder_returns_complete_portable_rd(machine, doc):
     values = _values(records, "layer_laser_1_max_power")
     assert values[0]["layer"] == 0
     assert values[0]["power_percent"] == pytest.approx(50, abs=0.004)
+
+
+def test_controller_bounds_allow_exact_edges_with_top_right_origin(
+    machine,
+    doc,
+):
+    machine.set_axis_extents(200, 150)
+    machine.origin = Origin.TOP_RIGHT
+    metadata = _metadata()
+    ops = Ops()
+    _process_start(ops, metadata)
+    _state(ops, metadata)
+    ops.move_to(0, 0)
+    ops.line_to(200, 150)
+    _process_end(ops, metadata)
+
+    result = RuidaEncoder().encode(ops, machine, doc)
+
+    assert result.driver_data["bounds_mm"] == (0.0, 0.0, 200.0, 150.0)
+    assert result.driver_data["machine_xy_extents_mm"] == (200.0, 150.0)
+
+
+def test_encoder_cache_token_tracks_machine_xy_extents(machine):
+    original = list(machine.axis_extents)
+    initial = RuidaEncoder.token_payload(machine)
+
+    machine.set_axis_extents(300, 175)
+
+    resized = RuidaEncoder.token_payload(machine)
+    assert initial["machine_xy_extents_mm"] == original
+    assert resized["machine_xy_extents_mm"] == [300.0, 175.0]
+    assert resized != initial
+
+
+def test_vector_rejects_small_negative_controller_coordinate(machine):
+    metadata = _metadata()
+    ops = Ops()
+    _process_start(ops, metadata)
+    _state(ops, metadata)
+    ops.move_to(-0.000001, 20)
+    ops.line_to(30, 20)
+    _process_end(ops, metadata)
+
+    with pytest.raises(
+        RuidaEncodingError,
+        match=r"X coordinate -1e-06 mm.*controller bounds 0\.\.200 mm",
+    ):
+        RuidaOpsAdapter(machine).build_plan(ops)
+
+
+def test_native_raster_rejects_small_out_of_bounds_endpoint(machine):
+    metadata = _metadata(
+        kind="raster",
+        power=128 / 255,
+        min_power=128 / 255,
+        max_power=128 / 255,
+    )
+    ops = Ops()
+    _process_start(ops, metadata)
+    _state(ops, metadata)
+    ops.move_to(199, 20)
+    ops.scan_to(
+        200.000001,
+        20,
+        power_values=bytearray([128, 128]),
+    )
+    _process_end(ops, metadata)
+
+    with pytest.raises(
+        RuidaEncodingError,
+        match=r"X coordinate 200\.000001 mm.*controller bounds 0\.\.200 mm",
+    ):
+        RuidaOpsAdapter(machine).build_plan(ops)
+
+
+def test_planned_path_rejects_small_out_of_bounds_endpoint(machine):
+    machine.driver_args["job_profile"] = "planned-path-research"
+    metadata = _metadata(
+        kind="raster",
+        power=128 / 255,
+        min_power=128 / 255,
+        max_power=128 / 255,
+        power_mode="static",
+        raster_axis="mixed",
+        raster_mode="CONSTANT_POWER",
+        depth_mode="mask_scan",
+        scan_angle=45,
+    )
+    ops = Ops()
+    _process_start(ops, metadata)
+    _state(ops, metadata)
+    ops.ops_section_start(
+        SectionType.RASTER_FILL,
+        "workpiece",
+        raster_mode=RasterMode.CONSTANT_POWER,
+    )
+    ops.move_to(199, 149)
+    ops.scan_to(
+        200.000001,
+        150,
+        power_values=bytearray([128, 128]),
+    )
+    ops.ops_section_end(
+        SectionType.RASTER_FILL,
+        raster_mode=RasterMode.CONSTANT_POWER,
+    )
+    _process_end(ops, metadata)
+
+    with pytest.raises(
+        RuidaEncodingError,
+        match=r"X coordinate 200\.000001 mm.*controller bounds 0\.\.200 mm",
+    ):
+        RuidaOpsAdapter(
+            machine,
+            "planned-path-research",
+        ).build_plan(ops)
 
 
 def test_ruida_contour_pipeline_linearizes_arcs_and_round_trips_rd(

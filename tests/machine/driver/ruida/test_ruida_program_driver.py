@@ -65,7 +65,16 @@ class FakeCodec:
     def __init__(self, payload=b"complete-rd"):
         self.payload = payload
         self.program = SimpleNamespace(
-            records=[object()],
+            records=[
+                SimpleNamespace(
+                    name="move_absolute",
+                    values={"x_mm": 1.0, "y_mm": 1.0},
+                ),
+                SimpleNamespace(
+                    name="cut_absolute",
+                    values={"x_mm": 2.0, "y_mm": 2.0},
+                ),
+            ],
             issues=[],
             payload=payload,
         )
@@ -140,7 +149,12 @@ def fake_api(monkeypatch):
 def driver_objects():
     manager = SimpleNamespace(machines={})
     context = SimpleNamespace(machine_mgr=manager)
-    machine = SimpleNamespace(id="test-machine", driver_args={}, heads=[])
+    machine = SimpleNamespace(
+        id="test-machine",
+        driver_args={},
+        heads=[],
+        axis_extents=(200.0, 150.0),
+    )
     return context, machine
 
 
@@ -321,6 +335,108 @@ async def test_run_validates_and_transfers_before_callbacks(
     with pytest.raises(DeviceConnectionError, match="may still be executing"):
         await driver.run(output, MagicMock(), MagicMock())
 
+    await driver.cleanup()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("driver_cls", "setup_args"),
+    (
+        (RuidaSerialDriver, {"port": "/dev/cu.ruida", "baudrate": 115200}),
+        (
+            RuidaUdpProgramDriver,
+            {"host": "192.0.2.10", "port": 50200, "local_port": 40200},
+        ),
+    ),
+)
+async def test_out_of_bounds_payload_fails_before_transport_open_or_write(
+    fake_api,
+    driver_objects,
+    driver_cls,
+    setup_args,
+):
+    _, codec = fake_api
+    codec.program.records = [
+        SimpleNamespace(
+            name="move_absolute",
+            values={"x_mm": 199.0, "y_mm": 149.0},
+        ),
+        SimpleNamespace(
+            name="cut_relative",
+            values={"dx_mm": 1.000001, "dy_mm": 1.0},
+        ),
+    ]
+    context, machine = driver_objects
+    driver = driver_cls(context, machine)
+    driver.setup(**setup_args)
+    client = client_for(driver)
+
+    with pytest.raises(
+        DeviceConnectionError,
+        match=r"X coordinate 200\.000001 mm.*bounds 0\.\.200 mm",
+    ):
+        await driver.run(make_output(), MagicMock(), MagicMock())
+
+    assert client.open_probes == []
+    assert client.sent_programs == []
+    await driver.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_out_of_bounds_payload_does_not_write_connected_transport(
+    fake_api,
+    driver_objects,
+):
+    _, codec = fake_api
+    codec.program.records = [
+        SimpleNamespace(
+            name="move_absolute",
+            values={"x_mm": 0.0, "y_mm": 0.0},
+        ),
+        SimpleNamespace(
+            name="cut_absolute",
+            values={"x_mm": 200.0, "y_mm": 150.001},
+        ),
+    ]
+    context, machine = driver_objects
+    driver = RuidaSerialDriver(context, machine)
+    driver.setup(port="/dev/cu.ruida", baudrate=115200)
+    await driver.connect()
+    client = client_for(driver)
+
+    with pytest.raises(DeviceConnectionError, match="Y coordinate 150.001"):
+        await driver.run(make_output(), MagicMock(), MagicMock())
+
+    assert client.sent_programs == []
+    assert driver._execution_unconfirmed is False
+    await driver.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_pretransfer_bounds_allow_exact_machine_edges(
+    fake_api,
+    driver_objects,
+):
+    _, codec = fake_api
+    codec.program.records = [
+        SimpleNamespace(
+            name="move_absolute",
+            values={"x_mm": 0.0, "y_mm": 0.0},
+        ),
+        SimpleNamespace(
+            name="cut_absolute",
+            values={"x_mm": 200.0, "y_mm": 150.0},
+        ),
+    ]
+    context, machine = driver_objects
+    driver = RuidaSerialDriver(context, machine)
+    driver.setup(port="/dev/cu.ruida", baudrate=115200)
+    await driver.connect()
+    client = client_for(driver)
+
+    await driver.run(make_output(), MagicMock(), MagicMock())
+
+    assert client.sent_programs == [codec.program]
     await driver.cleanup()
 
 
