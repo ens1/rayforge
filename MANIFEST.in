@@ -4,6 +4,7 @@ recursive-include rayforge/builtin_addons *.py *.yaml *.po *.pot *.mo *.png *.jp
 include tests/machine/driver/ruida/test_ruida_hardware_evidence.py
 include tests/machine/driver/ruida/test_ruida_batch_hardware_evidence.py
 include tests/machine/driver/ruida/test_ruida_native_raster_failure_evidence.py
+include tests/machine/driver/ruida/test_ruida_native_raster_aa_evidence.py
 recursive-include tests/machine/driver/ruida/fixtures/hardware *.json *.md
 recursive-include tests/machine/driver/ruida/fixtures/hardware *.png *.rd
 recursive-include tests/machine/driver/ruida/fixtures/hardware *.rd.quarantined

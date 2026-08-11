@@ -1,0 +1,161 @@
+{
+  "schema": "ruida-re.hardware-native-raster-aa-observation.v1",
+  "identifier": "boss-ls2040-usb-serial-rayforge-native-raster-aa-v1",
+  "observed_on": "2026-08-11",
+  "generating_revisions": {
+    "rayforge": "c7620da08e7f7e2dd1260736c3098148dd86df21",
+    "raygeo": "5663bec8c5d47ebb7f3f09d6df0658f5bdac8583",
+    "ruida_re": "8c483cd17793d84a1cd83d80dc1d0760e6582cc8"
+  },
+  "scope": {
+    "description": "One supervised execution of an exact Rayforge-generated horizontal constant-power native-raster discriminator produced the operator-reported expected appearance.",
+    "limitations": [
+      "The host transfer summary proves one packet with zero retries, not controller receipt or execution completion.",
+      "The observation was visual and had no dimensional, optical, electrical, timing, or motion sensor instrumentation.",
+      "The decoded 25 mm and 24 mm marks and 11 mm gap are planned geometry, not operator-measured dimensions.",
+      "The artifact contains no C7 or C2 immediate modulation, so it provides no variable-power or grayscale raster evidence.",
+      "The result is scoped to this exact artifact and does not establish other scan strategies, powers, speeds, controllers, transports, or broad profile compatibility."
+    ]
+  },
+  "environment": {
+    "host_platform": "macOS",
+    "machine": "Boss LS2040",
+    "configured_controller_profile": "Ruida 644XS",
+    "transport": {
+      "kind": "USB serial",
+      "baud": 115200,
+      "controller_acknowledgement_available": false,
+      "execution_acknowledgement_available": false
+    },
+    "material": {
+      "description": "cardboard",
+      "dimensions_mm": [
+        152.4,
+        762.0
+      ],
+      "reported_origin_mm": {
+        "x": 0.0,
+        "y": 0.0
+      }
+    },
+    "physical_source_inhibited": false
+  },
+  "process": {
+    "profile": "proven",
+    "kind": "raster",
+    "raster_processing": "native",
+    "scan_axis": "horizontal",
+    "power_mode": "constant",
+    "speed_mm_s": 100.0,
+    "requested_power_percent": 20.0,
+    "encoded_power_percent": 20.002441555270707,
+    "air_assist_requested": false,
+    "laser_enable_mask": 1,
+    "layer_mode": 2,
+    "layer_operation": 1,
+    "controller_bounds_mm": {
+      "min_x": 60.0,
+      "min_y": 48.052,
+      "max_x": 120.0,
+      "max_y": 48.052
+    },
+    "logical_plan": [
+      {
+        "type": "mark_to",
+        "distance_mm": 25.0
+      },
+      {
+        "type": "travel_to",
+        "distance_mm": 11.0
+      },
+      {
+        "type": "mark_to",
+        "distance_mm": 24.0
+      }
+    ],
+    "wire_motion": {
+      "move_absolute_records": 2,
+      "cut_horizontal_records": 13,
+      "cut_horizontal_opcode": "aa",
+      "signed_chunk_lengths_mm": [
+        -4.0,
+        -4.0,
+        -4.0,
+        -4.0,
+        -4.0,
+        -4.0,
+        -1.0,
+        -4.0,
+        -4.0,
+        -4.0,
+        -4.0,
+        -4.0,
+        -4.0
+      ],
+      "maximum_absolute_chunk_length_mm": 4.0,
+      "forbidden_records_absent": [
+        "cut_absolute",
+        "cut_relative",
+        "immediate_power_1",
+        "immediate_power_3"
+      ],
+      "forbidden_opcodes_absent": [
+        "a8",
+        "a9",
+        "c7",
+        "c2"
+      ]
+    }
+  },
+  "artifact": {
+    "file": "boss-ls2040-native-raster-aa-20pct-y47-offline-v1.rd",
+    "sha256": "d90990c0acfb4fc07fdee57ea50cbf6d7b3201a5ae8bae201ac716371eb49024",
+    "size_bytes": 525,
+    "checksum": 28182,
+    "records": 82,
+    "known_records": 82,
+    "opaque_records": 0,
+    "issues": [],
+    "exact_preserve_roundtrip": true,
+    "exact_recompute_roundtrip": true
+  },
+  "transmission": {
+    "explicit_operator_approval": true,
+    "artifact_sha256": "d90990c0acfb4fc07fdee57ea50cbf6d7b3201a5ae8bae201ac716371eb49024",
+    "host_log": {
+      "scope": "host-side driver transfer summary",
+      "packets": 1,
+      "payload_bytes": 525,
+      "retries": 0,
+      "controller_acknowledgement": false,
+      "execution_acknowledgement": false
+    }
+  },
+  "operator_observation": {
+    "reported_verbatim": "Everything looks right to me",
+    "instrumented_metrology": false
+  },
+  "result": {
+    "status": "scoped-native-raster-aa-pass",
+    "constant_power_native_raster": {
+      "status": "operator-observed-pass",
+      "scope": "the expected appearance of the exact two-mark, one-travel-gap artifact"
+    },
+    "dimensional_metrology": "not-performed",
+    "variable_power_raster": "not-tested",
+    "broad_profile_conclusion": "not-established"
+  },
+  "relationship_to_prior_negative_evidence": {
+    "identifier": "boss-ls2040-usb-serial-rayforge-native-raster-failure-v1",
+    "artifact_sha256": "ee1ae328fd431b75f43f0bf61feaf1e08e4ef511fb0c3615d95b0d38aab5e3b4",
+    "disposition": "remains-quarantined-do-not-resend",
+    "superseded": false,
+    "causal_attribution": "not-established",
+    "material_differences": [
+      "all marked motion uses native AA chunks no longer than 4 mm",
+      "constant 20% requested power replaces the prior 15% maximum and low-power edges",
+      "C7 and C2 immediate modulation are absent",
+      "the discriminator contains one raster row rather than a mixed vector and two-row raster job"
+    ]
+  }
+}
