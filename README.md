@@ -122,6 +122,17 @@ five-mark diagonal sections at 100 mm/s; the operator reported both directions
 visible and no connection burns. Its small top-left edge is a decoded 0.3507 mm
 `cut_relative` mark, not evidence for pulse control.
 
+Ruida's native grayscale `C7`/`C2` values are normalized positions within the
+layer minimum/maximum range, not absolute output percentages. Rayforge's
+`absolute_u8` scanline bytes are already resolved hardware outputs, so the
+adapter inverse-normalizes each positive sample with
+`(sample - minimum) / (maximum - minimum)` before compiling it. Passing an
+absolute sample directly would apply the layer range a second time. Exact-zero
+samples remain travel motion, and the observed raw-field floor is retained for
+positive modulation. This mapping is supported by controlled LightBurn exports
+and the producer contract; variable-power native raster remains pending a
+scoped hardware coupon.
+
 Four one-layer dynamic-vector coupons were also run on that machine at
 100 mm/s. The first, planned as 15%-10%-15%, looked solid and did not establish
 that power changed. On a longer 15%-5%-15% coupon, the operator observed good

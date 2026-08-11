@@ -513,7 +513,15 @@ def test_ruida_contour_pipeline_linearizes_arcs_and_round_trips_rd(
     ),
     (
         pytest.param(0.8, 0.2, 0.6, 16, 48, 122, id="bounded-dynamic"),
-        pytest.param(0.2, 0.0, 1.0, 20, 20, 51, id="default-20-percent"),
+        pytest.param(
+            0.2,
+            0.0,
+            1.0,
+            16 * 100 / 16383,
+            20,
+            51,
+            id="default-20-percent",
+        ),
     ),
 )
 def test_engrave_pipeline_respects_dynamic_power_contract(
@@ -577,6 +585,25 @@ def test_engrave_pipeline_respects_dynamic_power_contract(
     )
     assert plan.layers[0].max_power_percent == pytest.approx(
         expected_max_percent
+    )
+    modulations = [
+        event.percent
+        for event in plan.layers[0].events
+        if isinstance(event, SetModulation)
+    ]
+    assert modulations
+    effective = [
+        expected_min_percent
+        + value / 100 * (expected_max_percent - expected_min_percent)
+        for value in modulations
+    ]
+    expected_sample_percent = min(
+        expected_black_sample * 100 / 255,
+        expected_max_percent,
+    )
+    assert effective == pytest.approx(
+        [expected_sample_percent] * len(effective),
+        abs=0.004,
     )
 
     result = RuidaEncoder().encode(ops, machine, doc)
@@ -745,7 +772,7 @@ def test_rotated_engrave_resolves_machine_axis_and_round_trips_rd(
     plan = RuidaOpsAdapter(machine).build_plan(ops)
     assert [layer.scan_axis for layer in plan.layers] == ["vertical"]
     assert [layer.min_power_percent for layer in plan.layers] == pytest.approx(
-        [20]
+        [16 * 100 / 16383]
     )
 
     result = RuidaEncoder().encode(ops, machine, doc)
@@ -810,7 +837,7 @@ def test_multi_workpiece_engrave_resolves_each_section_axis(
         "vertical",
     ]
     assert [layer.min_power_percent for layer in plan.layers] == pytest.approx(
-        [20, 20]
+        [16 * 100 / 16383, 16 * 100 / 16383]
     )
 
     result = RuidaEncoder().encode(ops, machine, doc)
@@ -946,7 +973,7 @@ def test_full_power_does_not_wrap_to_zero(machine, doc):
     ]
 
 
-def test_raster_samples_are_absolute_not_scaled_by_process_power(machine):
+def test_absolute_raster_samples_map_into_layer_power_range(machine):
     plan = RuidaOpsAdapter(machine).build_plan(_raster_ops())
 
     layer = plan.layers[0]
@@ -960,9 +987,14 @@ def test_raster_samples_are_absolute_not_scaled_by_process_power(machine):
     assert layer.max_power_percent == pytest.approx(90)
     assert layer.scan_axis == "horizontal"
     assert layer.raster_strategy == "bidirectional"
-    assert modulations[:3] == pytest.approx(
-        [26 * 100 / 255, 128 * 100 / 255, 230 * 100 / 255]
-    )
+    assert modulations[:3] == pytest.approx([0.2450980392, 50.2450980392, 100])
+
+    effective = [
+        layer.min_power_percent
+        + percent / 100 * (layer.max_power_percent - layer.min_power_percent)
+        for percent in modulations[:3]
+    ]
+    assert effective == pytest.approx([26 * 100 / 255, 128 * 100 / 255, 90])
 
 
 def test_raster_compiles_immediate_power_records(machine, doc):
@@ -970,7 +1002,49 @@ def test_raster_compiles_immediate_power_records(machine, doc):
     powers = _values(_records(result.payload), "immediate_power_1")
 
     assert [value["power_percent"] for value in powers[:3]] == pytest.approx(
-        [26 * 100 / 255, 128 * 100 / 255, 230 * 100 / 255],
+        [0.2450980392, 50.2450980392, 100],
+        abs=0.004,
+    )
+
+
+def test_native_raster_normalizes_absolute_samples_within_layer_range(
+    machine,
+    doc,
+):
+    metadata = _metadata(
+        kind="raster",
+        power=0.15,
+        min_power=5 / 255,
+        max_power=0.15,
+        raster_strategy="unidirectional",
+    )
+    ops = Ops()
+    _process_start(ops, metadata)
+    ops.move_to(20, 20)
+    ops.scan_to(
+        25,
+        20,
+        power_values=bytearray([5, 38, 0, 38, 5]),
+    )
+    _process_end(ops, metadata)
+
+    layer = RuidaOpsAdapter(machine).build_plan(ops).layers[0]
+    modulations = [
+        event.percent
+        for event in layer.events
+        if isinstance(event, SetModulation)
+    ]
+    floor = 16 * 100 / 16383
+    high = (38 * 100 / 255 - 5 * 100 / 255) * 100 / (15 - 5 * 100 / 255)
+
+    assert layer.min_power_percent == pytest.approx(5 * 100 / 255)
+    assert layer.max_power_percent == pytest.approx(15)
+    assert modulations == pytest.approx([floor, high, high, floor])
+    assert high > 99
+    records = _records(RuidaEncoder().encode(ops, machine, doc).payload)
+    encoded = _values(records, "immediate_power_1")
+    assert [value["power_percent"] for value in encoded] == pytest.approx(
+        [floor, high, high, floor],
         abs=0.004,
     )
 
@@ -1110,6 +1184,26 @@ def test_mixed_variable_power_raster_requires_scan_line(machine):
     ops.line_to(30, 20)
 
     with pytest.raises(RuidaEncodingError, match="must use ScanLine"):
+        RuidaOpsAdapter(machine).build_plan(ops)
+
+
+def test_mixed_variable_power_scan_requires_explicit_range(machine):
+    metadata = _metadata(kind="mixed")
+    ops = Ops()
+    _process_start(ops, metadata)
+    _state(ops, metadata)
+    ops.ops_section_start(
+        SectionType.RASTER_FILL,
+        "grid",
+        raster_mode=RasterMode.VARIABLE_POWER,
+    )
+    ops.move_to(20, 20)
+    ops.scan_to(30, 20, power_values=bytearray([128]))
+
+    with pytest.raises(
+        RuidaEncodingError,
+        match="requires explicit absolute output range metadata",
+    ):
         RuidaOpsAdapter(machine).build_plan(ops)
 
 
@@ -1430,7 +1524,7 @@ def test_zero_raster_samples_are_travel_not_zero_power_marks(machine):
     assert layer.events == (
         TravelTo(20, 20),
         TravelTo(21, 20),
-        SetModulation(128 * 100 / 255),
+        SetModulation((128 * 100 / 255 - 10) * 100 / 90),
         MarkTo(22, 20),
         TravelTo(23, 20),
         SetModulation(100),
@@ -1460,14 +1554,18 @@ def test_native_variable_raster_zero_minimum_uses_positive_sample_floor(
 
     layer = RuidaOpsAdapter(machine).build_plan(ops).layers[0]
 
-    assert layer.min_power_percent == pytest.approx(100 / 255)
+    assert layer.min_power_percent == pytest.approx(16 * 100 / 16383)
     assert layer.max_power_percent == pytest.approx(100)
     assert layer.events == (
         TravelTo(20, 20),
         TravelTo(21, 20),
-        SetModulation(100 / 255),
+        SetModulation(
+            (100 / 255 - 16 * 100 / 16383) * 100 / (100 - 16 * 100 / 16383)
+        ),
         MarkTo(22, 20),
-        SetModulation(200 / 255),
+        SetModulation(
+            (200 / 255 - 16 * 100 / 16383) * 100 / (100 - 16 * 100 / 16383)
+        ),
         MarkTo(23, 20),
         TravelTo(24, 20),
     )
@@ -1478,7 +1576,11 @@ def test_native_variable_raster_zero_minimum_uses_positive_sample_floor(
     ("minimum", "expected_minimum_percent"),
     (
         pytest.param(0.001, 0.1, id="raw-16-preserved"),
-        pytest.param(0.0009, 100 / 255, id="raw-15-derived"),
+        pytest.param(
+            0.0009,
+            16 * 100 / 16383,
+            id="raw-15-raised-to-wire-floor",
+        ),
     ),
 )
 def test_native_variable_raster_minimum_respects_observed_wire_floor(
@@ -1527,7 +1629,7 @@ def test_raster_samples_compile_as_constant_power_spans(machine):
     assert layer.events == (
         TravelTo(20, 20),
         TravelTo(22, 20),
-        SetModulation(128 * 100 / 255),
+        SetModulation(100),
         MarkTo(25, 20),
         TravelTo(26, 20),
     )
@@ -1845,10 +1947,10 @@ def test_compatible_unidirectional_sections_share_one_layer(machine):
     assert plan.layers[0].raster_strategy == "unidirectional"
     assert plan.layers[0].events == (
         TravelTo(20, 20),
-        SetModulation(128 * 100 / 255),
+        SetModulation(100),
         MarkTo(30, 20),
         TravelTo(20, 30),
-        SetModulation(128 * 100 / 255),
+        SetModulation(100),
         MarkTo(30, 30),
     )
 

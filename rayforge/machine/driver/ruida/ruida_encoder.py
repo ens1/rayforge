@@ -915,6 +915,53 @@ def _ruida_power_wire_value(percent: float) -> int:
     return int(percent * _RUIDA_POWER_WIRE_SCALE / 100 + 0.5)
 
 
+def _ruida_power_percent_from_wire(value: int) -> float:
+    return value * 100 / _RUIDA_POWER_WIRE_SCALE
+
+
+def _native_raster_power_range(
+    process: _ProcessMetadata,
+) -> tuple[float, float]:
+    minimum = process.raster_min_power
+    maximum = process.raster_max_power
+    if minimum is None or maximum is None:
+        raise RuidaEncodingError(
+            "Raster metadata requires min and max output power"
+        )
+    minimum_percent = minimum * 100
+    if (
+        process.raster_mode == "VARIABLE_POWER"
+        and _ruida_power_wire_value(minimum_percent)
+        < _RUIDA_OBSERVED_MARK_POWER_RAW_MINIMUM
+    ):
+        minimum_percent = _ruida_power_percent_from_wire(
+            _RUIDA_OBSERVED_MARK_POWER_RAW_MINIMUM
+        )
+    return minimum_percent, maximum * 100
+
+
+def _native_raster_modulation_percent(
+    process: _ProcessMetadata,
+    sample: int,
+) -> float:
+    minimum, maximum = _native_raster_power_range(process)
+    if _ruida_power_wire_value(maximum) < (
+        _RUIDA_OBSERVED_MARK_POWER_RAW_MINIMUM
+    ):
+        raise RuidaEncodingError(
+            "Raster maximum power must encode at or above raw power 16"
+        )
+    if math.isclose(minimum, maximum, rel_tol=0, abs_tol=1e-12):
+        return 100.0
+    absolute = sample * 100 / 255
+    normalized = (absolute - minimum) * 100 / (maximum - minimum)
+    normalized = min(100.0, max(0.0, normalized))
+    floor = _ruida_power_percent_from_wire(
+        _RUIDA_OBSERVED_MARK_POWER_RAW_MINIMUM
+    )
+    return max(floor, normalized)
+
+
 def _same_wire_position(
     start: tuple[float, float, float],
     end: tuple[float, float, float],
@@ -1198,16 +1245,12 @@ class _LayerBuilder:
             raise RuidaEncodingError(
                 "Raster minimum power cannot exceed maximum power"
             )
-        minimum_percent = minimum * 100
         if (
             self.key.raster_processing == "native"
-            and self.process.raster_mode == "VARIABLE_POWER"
-            and _ruida_power_wire_value(minimum_percent)
-            < _RUIDA_OBSERVED_MARK_POWER_RAW_MINIMUM
-            and self.raster_powers
+            and self.process.kind == "raster"
         ):
-            minimum_percent = min(self.raster_powers)
-        return minimum_percent, maximum * 100
+            return _native_raster_power_range(self.process)
+        return minimum * 100, maximum * 100
 
     def _raster_axis(self) -> str:
         if len(self.raster_axes) != 1:
@@ -1682,6 +1725,11 @@ class RuidaOpsAdapter:
             end,
             raster_mode,
         )
+        if raster_mode == "VARIABLE_POWER" and process.kind != "raster":
+            raise RuidaEncodingError(
+                "Variable-power raster requires explicit absolute output "
+                "range metadata"
+            )
         if raster_mode == "CONSTANT_POWER":
             self._validate_constant_scan_samples(process, samples)
         if raster_processing == "planned-path":
@@ -1705,14 +1753,18 @@ class RuidaOpsAdapter:
             fraction = run_end / len(samples)
             x = start[0] + dx * fraction
             y = start[1] + dy * fraction
-            percent = sample * 100 / 255
+            absolute_percent = sample * 100 / 255
             if sample:
                 if (
                     raster_processing == "native"
                     and raster_mode == "VARIABLE_POWER"
                 ):
+                    modulation_percent = _native_raster_modulation_percent(
+                        process,
+                        sample,
+                    )
                     builder.append_event(
-                        self.api.SetModulation(percent),
+                        self.api.SetModulation(modulation_percent),
                         None,
                     )
                 builder.append_event(
@@ -1720,7 +1772,7 @@ class RuidaOpsAdapter:
                     self._planned_section_id(builder),
                 )
                 if raster_mode == "VARIABLE_POWER":
-                    builder.raster_powers.append(percent)
+                    builder.raster_powers.append(absolute_percent)
             else:
                 builder.append_event(
                     self.api.TravelTo(x, y),
