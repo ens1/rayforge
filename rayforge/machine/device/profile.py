@@ -217,6 +217,7 @@ class MachineConfig:
     driver: str | None = None
     driver_args: dict[str, Any] | None = None
     driver_config: dict[str, Any] | None = None
+    auto_connect: bool | None = None
     gcode_precision: int | None = None
     supports_arcs: bool | None = None
     supports_curves: bool | None = None
@@ -297,6 +298,7 @@ class MachineConfig:
             driver=machine.driver_name or None,
             driver_args=machine.driver_args or None,
             driver_config=driver_config,
+            auto_connect=machine.auto_connect,
             gcode_precision=machine.gcode_precision,
             supports_arcs=machine.supports_arcs,
             supports_curves=machine.supports_curves,
@@ -406,6 +408,9 @@ class DeviceProfile:
         m = Machine(context)
         m.name = self.meta.name
         cfg = self.machine_config
+
+        if cfg.auto_connect is not None:
+            m.auto_connect = cfg.auto_connect
 
         context.machine_mgr.add_machine(m)
 

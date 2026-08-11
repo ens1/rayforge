@@ -1,0 +1,39 @@
+api_version: 1
+device:
+  name: Boss LS2040
+  vendor: Boss Laser
+  model: LS2040
+  description: CO2 laser cutter with a Ruida controller and USB serial transfer
+machine:
+  driver: RuidaSerialDriver
+  driver_args:
+    port: ''
+    baudrate: 115200
+    job_profile: proven
+  auto_connect: false
+  gcode_precision: 3
+  supports_arcs: false
+  supports_curves: false
+  axis_extents:
+  - 991.1080322265625
+  - 599.947998046875
+  origin: top_right
+  max_travel_speed: 10000
+  max_cut_speed: 6000
+  home_on_start: false
+  single_axis_homing_enabled: false
+  rotary_enabled_default: false
+  unit_system: metric
+  heads:
+  - name: CO2 Laser
+    tool_number: 0
+    max_power: 1000
+    frame_power_percent: 0.0
+    focus_power_percent: 0.0
+    frame_speed: 6000
+    frame_repeat_count: 1
+    frame_corner_pause: 0.0
+    spot_size_mm:
+    - 0.1
+    - 0.1
+    laser_type: co2
