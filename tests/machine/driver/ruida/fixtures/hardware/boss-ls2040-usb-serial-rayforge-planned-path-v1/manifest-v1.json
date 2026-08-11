@@ -1,0 +1,249 @@
+{
+  "schema": "rayforge.hardware-ruida-planned-path-validation.v1",
+  "identifier": "hardware-boss-ls2040-usb-serial-rayforge-planned-path-v1",
+  "observed_on": "2026-08-10",
+  "generating_revisions": {
+    "rayforge": "22c7a54cdd441e7917206418fd843bc3a23ee476",
+    "raygeo": "d14784963ea6abd0c91c18bf1cc6a362d7057519",
+    "ruida_re": "7ef0ff5011bd0684a2a70cb72c43e666f9438651"
+  },
+  "scope": {
+    "description": "A supervised execution of one exact Rayforge-generated, single-section planned-path raster artifact configured with a 45-degree source-space scan angle.",
+    "validated_subset": [
+      "An opaque PNG imported as a real Rayforge SourceAsset and WorkPiece.",
+      "One EngraveStep planned through IntentBuilder, Raygeo, the machine transform, and RuidaEncoder.",
+      "One layer-zero planned-path RasterSection containing five constant-power diagonal marks from one configured Rayforge laser-head intent.",
+      "Visible output from the exact content-addressed .rd artifact on the configured Boss LS2040."
+    ],
+    "limitations": [
+      "The controller identity is the configured profile and was not independently interrogated.",
+      "The USB serial host log proves transfer activity only; it has no controller or execution-completion acknowledgement.",
+      "The reported result is an operator observation, not independent dimensional, angular, spacing, timing, or power metrology.",
+      "The physical air-assist state was not independently observed.",
+      "The Rayforge intent selected laser channel 1, but mirrored L1 and L2 power records in the artifact and the single-tube observation do not establish physical channel routing.",
+      "This validation does not cover a second RasterSection, the section-separator operation, cross-hatch, native-raster bidirectional mode semantics or calibration, grayscale modulation, another angle, multiple layers, or another controller model.",
+      "This validation does not cover rotary, Z motion, dwell, pulse or frequency controls, extra laser heads, or dynamic vector power."
+    ]
+  },
+  "environment": {
+    "host_platform": "macOS",
+    "machine": "Boss LS2040",
+    "configured_controller_profile": "Ruida 644XS",
+    "transport": {
+      "kind": "USB serial",
+      "baud": 115200,
+      "controller_acknowledgement_available": false,
+      "execution_acknowledgement_available": false
+    },
+    "material": {
+      "description": "cardboard",
+      "dimensions_mm": [
+        152.4,
+        762.0
+      ],
+      "axis_orientation": "not-recorded",
+      "reported_origin_mm": {
+        "x": 0.0,
+        "y": 0.0
+      }
+    }
+  },
+  "source": {
+    "file": "opaque-12x18-source.png",
+    "sha256": "1edc07dc386bc3a3cd109fb1154b3bc202cbdd4254d256c3f9116c379ed4eb96",
+    "size_bytes": 108,
+    "pixels": [
+      48,
+      72
+    ],
+    "mode": "RGB",
+    "content": "opaque black",
+    "world_size_mm": [
+      12.0,
+      18.0
+    ],
+    "machine_item_position_mm": [
+      41.0,
+      21.0
+    ]
+  },
+  "generation": {
+    "hardware_io": false,
+    "auto_connect": false,
+    "pipeline": [
+      "EngraveStep",
+      "IntentBuilder",
+      "Raygeo compute and aggregate",
+      "machine transform",
+      "RuidaEncoder"
+    ],
+    "machine_model": {
+      "origin": "top_right",
+      "axis_extents_mm": [
+        991.1080322265625,
+        599.947998046875
+      ],
+      "reverse_x_axis": false,
+      "reverse_y_axis": false,
+      "rotary_enabled": false,
+      "wcs": "G54",
+      "wcs_offset_mm": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    "process": {
+      "kind": "raster",
+      "profile": "planned-path-research",
+      "raster_processing": "planned-path",
+      "depth_mode": "CONSTANT_POWER",
+      "rayforge_laser_channel_intent": 1,
+      "requested_power_percent": 15.0,
+      "encoded_power_percent": 14.997253250320455,
+      "speed_mm_s": 100.0,
+      "source_scan_angle_degrees": 45.0,
+      "controller_coordinate_slope": "negative",
+      "line_interval_mm": 4.0,
+      "sample_interval_mm": 0.5,
+      "cross_hatch": false,
+      "overscan_enabled": false,
+      "air_assist_requested": false
+    },
+    "adapted_plan": {
+      "layers": 1,
+      "raster_sections": 1,
+      "travel_events": 5,
+      "mark_events": 5,
+      "controller_bounds_mm": {
+        "min_x": 40.92705016129855,
+        "min_y": 21.11161726804346,
+        "max_x": 53.1874578013842,
+        "max_y": 39.19603644514689
+      }
+    }
+  },
+  "artifact": {
+    "file": "boss-ls2040-top-right-diagonal-45-15pct-v2.rd",
+    "sha256": "52327453d276567086eb441a61efae887c13e13ef344c6cb55a06cd6fad2c8aa",
+    "size_bytes": 538,
+    "container": "rd",
+    "checksum": {
+      "command": "file_checksum",
+      "algorithm": "logical-byte-sum-before-file-checksum",
+      "value": 25253
+    },
+    "encoded_power_records": {
+      "laser_1_percent": 14.997253250320455,
+      "laser_2_percent": 14.997253250320455,
+      "physical_channel_routing_evidence": "not-observed"
+    },
+    "decode": {
+      "records": 77,
+      "known_records": 77,
+      "opaque_records": 0,
+      "issues": [],
+      "exact_preserve_roundtrip": true,
+      "exact_recompute_roundtrip": true
+    },
+    "advertised_bounds_mm": {
+      "min_x": 40.93,
+      "min_y": 21.11,
+      "max_x": 53.19,
+      "max_y": 39.2
+    },
+    "decoded_motion": [
+      {
+        "type": "travel_to",
+        "x_mm": 45.524,
+        "y_mm": 21.112
+      },
+      {
+        "type": "mark_to",
+        "x_mm": 41.07,
+        "y_mm": 25.282
+      },
+      {
+        "type": "travel_to",
+        "x_mm": 41.099,
+        "y_mm": 30.911
+      },
+      {
+        "type": "mark_to",
+        "x_mm": 51.102,
+        "y_mm": 21.19
+      },
+      {
+        "type": "travel_to",
+        "x_mm": 53.131,
+        "y_mm": 24.818
+      },
+      {
+        "type": "mark_to",
+        "x_mm": 40.927,
+        "y_mm": 36.739
+      },
+      {
+        "type": "travel_to",
+        "x_mm": 44.205,
+        "y_mm": 39.118
+      },
+      {
+        "type": "mark_to",
+        "x_mm": 53.109,
+        "y_mm": 30.497
+      },
+      {
+        "type": "travel_to",
+        "x_mm": 53.187,
+        "y_mm": 36.075
+      },
+      {
+        "type": "mark_to",
+        "x_mm": 49.784,
+        "y_mm": 39.196
+      }
+    ]
+  },
+  "transmission": {
+    "explicit_operator_approval": true,
+    "artifact_sha256": "52327453d276567086eb441a61efae887c13e13ef344c6cb55a06cd6fad2c8aa",
+    "host_log": {
+      "scope": "host-side driver transfer summary",
+      "packets": 1,
+      "retries": 0,
+      "controller_acknowledgement": false,
+      "execution_acknowledgement": false
+    }
+  },
+  "operator_observation": {
+    "status": "operator-reported-five-lines",
+    "reported_verbatim": "5 lines, just like before. They're more spaced out and going the opposite direction",
+    "interpretation": [
+      "The reported line count matches the five decoded marking events.",
+      "The direction comparison is consistent with negative-coordinate-slope marks produced by Raygeo's image-Y-down to world-Y-up conversion and preserved by the top-right two-axis reflection, versus positive-coordinate-slope marks in the hand-authored direct compiler coupon.",
+      "The spacing comparison is consistent with the Rayforge planner's 4 mm perpendicular interval versus the direct coupon's 2 mm Y offset, or about 1.414 mm perpendicular, making the Rayforge interval 2.828 times wider."
+    ],
+    "direct_coupon_reference": {
+      "ruida_re_evidence_revision": "b1b9e23e8bfdc05d76be20d51c75bb85c134243f",
+      "ten_percent_artifact_sha256": "1c28e301321fd54bf8e6bc54e7c9b370305fb601c0d1cea5ef4d9976124d953d",
+      "ten_percent_observation": "five movements; no visible marks",
+      "fifteen_percent_artifact_sha256": "92c328e7fc9d98ba38da1e8179560d2f2675ac79983b4efeef11889bb8bb1123",
+      "fifteen_percent_observation": "five visible lines; no connecting marks; not over-burnt"
+    },
+    "not_reported": [
+      "independent dimensional measurement",
+      "independent angular measurement",
+      "independent spacing measurement",
+      "independent speed or power measurement",
+      "controller completion acknowledgement"
+    ]
+  },
+  "result": {
+    "status": "operator-reported-five-lines",
+    "scoped_execution_evidence": "operator-observed",
+    "mode_wide_execution_evidence": "not-observed",
+    "default_profile_promotion": "withheld",
+    "mode_wide_evidence_reason": "Only this exact one-layer, one-section, five-mark, constant-power Rayforge pipeline artifact was observed on hardware."
+  }
+}

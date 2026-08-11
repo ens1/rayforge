@@ -8318,3 +8318,102 @@ msgstr "Bayer 4"
 #: rayforge/image/dither.py
 msgid "Bayer 8"
 msgstr "Bayer 8"
+
+#: rayforge/machine/driver/ruida/ruida_encoder.py
+msgid "Offline research; not hardware-validated"
+msgstr ""
+
+#: rayforge/machine/driver/ruida/ruida_encoder.py
+msgid "Proven LightBurn 2.1.03 / Ruida 644XS"
+msgstr ""
+
+#: rayforge/machine/driver/ruida/ruida_encoder.py
+msgid "Research; limited hardware evidence"
+msgstr ""
+
+#: rayforge/machine/driver/ruida/ruida_encoder.py
+msgid "planned-path raster"
+msgstr ""
+
+#: rayforge/machine/driver/ruida/ruida_encoder.py
+msgid "one selected channel; no simultaneous dual-head output"
+msgstr ""
+
+#: rayforge/machine/driver/ruida/ruida_encoder.py
+msgid "stationary dwell (manual Ops/frame only)"
+msgstr ""
+
+#: rayforge/machine/driver/ruida/ruida_encoder.py
+msgid "RF frequency (profile selection confirms RF hardware)"
+msgstr ""
+
+#: rayforge/machine/driver/ruida/ruida_encoder.py
+msgid "fiber pulse width"
+msgstr ""
+
+#: rayforge/machine/driver/ruida/ruida_encoder.py
+msgid "logical raster layer Z offset"
+msgstr ""
+
+#: rayforge/machine/driver/ruida/ruida_encoder.py
+msgid "dynamic vector power"
+msgstr ""
+
+#: rayforge/machine/driver/ruida/ruida_encoder.py
+msgid "Ruida Job Profile"
+msgstr ""
+
+#: rayforge/machine/driver/ruida/ruida_encoder.py
+msgid ""
+"Advanced profiles are evidence-limited; planned-path has narrow motion and "
+"marking observations, while all other profiles are offline-only"
+msgstr ""
+
+#: rayforge/machine/driver/ruida/ruida_encoder.py
+msgid "minimum"
+msgstr ""
+
+#: rayforge/machine/driver/ruida/ruida_encoder.py
+msgid "maximum"
+msgstr ""
+
+#: rayforge/machine/driver/ruida/ruida_encoder.py
+#, python-brace-format
+msgid "Laser {index} inactive stored {bound} power (%)"
+msgstr ""
+
+#: rayforge/machine/driver/ruida/ruida_encoder.py
+msgid ""
+"Required for an explicit two-channel research profile; -1 means unset, "
+"otherwise enter the controller's known stored value"
+msgstr ""
+
+#: rayforge/machine/driver/ruida/ruida_encoder.py
+#, python-brace-format
+msgid "Confirm laser {index} inactive powers"
+msgstr ""
+
+#: rayforge/machine/driver/ruida/ruida_encoder.py
+msgid ""
+"Confirms that this channel's inactive minimum and maximum power values were "
+"intentionally entered for the selected research profile"
+msgstr ""
+
+#: rayforge/machine/driver/ruida/ruida_encoder.py
+msgid ""
+"The selected Ruida planned-path research profile has limited hardware "
+"evidence from five-line, single-section diagonal coupons on a Boss LS2040 "
+"over USB serial: motion without visible marks at 10%, and visible marks at "
+"15%, including one job generated end to end by Rayforge. All ran at 100 mm/"
+"s; other accepted combinations remain unvalidated"
+msgstr ""
+
+#: rayforge/machine/driver/ruida/ruida_encoder.py
+msgid ""
+"The selected Ruida research profile has offline fixture evidence only and no "
+"hardware execution validation"
+msgstr ""
+
+#: rayforge/machine/driver/ruida/ruida_encoder.py
+msgid "Ruida TravelTo uses the controller-configured rapid rate"
+msgstr ""

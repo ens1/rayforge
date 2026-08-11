@@ -1466,8 +1466,12 @@ def test_planned_path_preserves_ops_raster_section_boundaries(machine, doc):
     assert result.driver_data["profile"].endswith("planned-path-research")
     assert result.warnings == (
         (
-            "The selected Ruida research profile has offline fixture evidence "
-            "only and no hardware execution validation"
+            "The selected Ruida planned-path research profile has limited "
+            "hardware evidence from five-line, single-section diagonal "
+            "coupons on a Boss LS2040 over USB serial: motion without visible "
+            "marks at 10%, and visible marks at 15%, including one job "
+            "generated end to end by Rayforge. All ran at 100 mm/s; other "
+            "accepted combinations remain unvalidated"
         ),
         "Ruida TravelTo uses the controller-configured rapid rate",
     )
@@ -1633,9 +1637,12 @@ def test_stationary_dwell_maps_milliseconds_and_compiles(machine, doc):
         Dwell(100),
         MarkTo(30, 20),
     )
-    records = _records(
-        RuidaEncoder("stationary-research").encode(ops, machine, doc).payload
+    result = RuidaEncoder("stationary-research").encode(ops, machine, doc)
+    assert result.warnings[0] == (
+        "The selected Ruida research profile has offline fixture evidence "
+        "only and no hardware execution validation"
     )
+    records = _records(result.payload)
     assert _values(records, "additional_delay") == [{"time_ms": 100.0}]
 
 

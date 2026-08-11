@@ -114,9 +114,13 @@ Rayforge compiles complete Ruida `.rd` programs through
 [ruida-re](https://github.com/ens1/ruida-re) and transfers them over USB
 serial or UDP. The conservative, hardware-observed `proven` profile remains
 the default. Advanced behavior must be enabled with an explicit research
-profile; those profiles are based on offline LightBurn 2.1.03 fixtures, have
-not been validated by hardware execution, emit a warning, and reject requests
-outside their narrow evidence before transfer.
+profile. Narrow, single-section, five-line planned-path coupons have been run
+on a Boss LS2040 over USB serial: a direct 10% coupon produced the expected
+motion without visible marks, while direct and Rayforge-generated 15% coupons
+produced visible lines. All ran at 100 mm/s. Every other accepted planned-path
+combination and every other research profile remains backed by offline
+LightBurn 2.1.03 fixtures only. Research profiles emit a warning and reject
+requests outside their narrow evidence before transfer.
 
 The opt-in profiles cover constant-power diagonal or cross-hatch planned-path
 raster, selecting either Ruida laser channel 1 or 2 (never both at once),

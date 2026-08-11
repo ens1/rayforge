@@ -299,34 +299,40 @@ def ruida_job_profile_vars() -> list[Any]:
     """Return persisted setup fields for the Ruida compiler profile."""
     from ....core.varset import BoolVar, FloatVar, LabeledChoiceVar
 
-    research = _("Offline research; not hardware-validated")
+    offline_research = _("Offline research; not hardware-validated")
     choices = [
         (_("Proven LightBurn 2.1.03 / Ruida 644XS"), "proven"),
         (
-            f"{research}: " + _("planned-path raster"),
+            _("Research; limited hardware evidence")
+            + ": "
+            + _("planned-path raster"),
             "planned-path-research",
         ),
         (
-            f"{research}: "
+            f"{offline_research}: "
             + _("one selected channel; no simultaneous dual-head output"),
             "dual-laser-research",
         ),
         (
-            f"{research}: " + _("stationary dwell (manual Ops/frame only)"),
+            f"{offline_research}: "
+            + _("stationary dwell (manual Ops/frame only)"),
             "stationary-research",
         ),
         (
-            f"{research}: "
+            f"{offline_research}: "
             + _("RF frequency (profile selection confirms RF hardware)"),
             "rf-research",
         ),
-        (f"{research}: " + _("fiber pulse width"), "fiber-research"),
         (
-            f"{research}: " + _("logical raster layer Z offset"),
+            f"{offline_research}: " + _("fiber pulse width"),
+            "fiber-research",
+        ),
+        (
+            f"{offline_research}: " + _("logical raster layer Z offset"),
             "z-research",
         ),
         (
-            f"{research}: " + _("dynamic vector power"),
+            f"{offline_research}: " + _("dynamic vector power"),
             "dynamic-power-research",
         ),
     ]
@@ -336,8 +342,9 @@ def ruida_job_profile_vars() -> list[Any]:
             label=_("Ruida Job Profile"),
             choices=choices,
             description=_(
-                "Advanced profiles come from offline producer fixtures and "
-                "have not been validated on hardware"
+                "Advanced profiles are evidence-limited; planned-path has "
+                "narrow motion and marking observations, while all other "
+                "profiles are offline-only"
             ),
             default=DEFAULT_RUIDA_JOB_PROFILE,
             allow_none=False,
@@ -370,7 +377,7 @@ def ruida_job_profile_vars() -> list[Any]:
                 description=_(
                     "Confirms that this channel's inactive minimum and "
                     "maximum power values were intentionally entered for "
-                    "the selected offline research profile"
+                    "the selected research profile"
                 ),
                 default=False,
             )
@@ -1098,7 +1105,19 @@ class RuidaOpsAdapter:
             Literal["horizontal", "vertical"] | None
         ) = None
         self.warnings: list[str] = []
-        if self.profile_name != DEFAULT_RUIDA_JOB_PROFILE:
+        if self.profile_name == "planned-path-research":
+            self.warnings.append(
+                _(
+                    "The selected Ruida planned-path research profile has "
+                    "limited hardware evidence from five-line, single-section "
+                    "diagonal coupons on a Boss LS2040 over USB serial: "
+                    "motion without visible marks at 10%, and visible marks "
+                    "at 15%, including one job generated end to end by "
+                    "Rayforge. All ran at 100 mm/s; other accepted "
+                    "combinations remain unvalidated"
+                )
+            )
+        elif self.profile_name != DEFAULT_RUIDA_JOB_PROFILE:
             self.warnings.append(
                 _(
                     "The selected Ruida research profile has offline "

@@ -488,10 +488,12 @@ compiler is provided by
 profile is based on LightBurn 2.1.03 output for a Ruida 644XS controller.
 
 :::warning
-The advanced profiles described below have offline producer-fixture evidence
-only. They have not been validated by hardware execution. Keep the `proven`
-profile selected unless you are intentionally evaluating one narrow research
-capability.
+The advanced profiles described below remain evidence-limited and intended
+for research. Narrow `planned-path-research` coupons have limited hardware
+motion and marking observations; every other accepted planned-path combination
+and every other research profile has offline producer-fixture evidence only.
+Keep the `proven` profile selected unless you are intentionally evaluating one
+narrow research capability.
 :::
 
 Before a Rayforge release can depend on this integration, `ruida-re` 0.1.0
@@ -528,16 +530,16 @@ image pipeline while allowing another laser application to integrate the same
 - Grayscale power modulation
 - One laser head and explicit air-assist state
 
-This conservative `proven` profile is selected by default and is the only
-profile with hardware execution evidence. It rejects all advanced capabilities
+This conservative `proven` profile is selected by default and remains the only
+profile intended for non-research use. It rejects all advanced capabilities
 below.
 
-#### Offline research profiles
+#### Evidence-limited research profiles
 
 Each profile must be selected explicitly in the Ruida driver settings. Every
-research profile emits an encoder warning, accepts exactly one evidenced
-layer, and fails closed before controller I/O when the job exceeds its scope.
-The profiles cannot be combined.
+research profile emits an encoder warning, accepts exactly one layer within
+its narrow scope, and fails closed before controller I/O when the job exceeds
+that scope. The profiles cannot be combined.
 
 | Profile | Narrow accepted scope |
 | :------ | :-------------------- |
@@ -548,6 +550,29 @@ The profiles cannot be combined.
 | `fiber-research` | One vector layer on a fiber head with pulse width from 0 through 0.2 µs, encoded as 0 through 200 ns. |
 | `z-research` | One native raster layer with a nonzero typed logical layer Z offset no greater than 1 mm in either direction. The compiler emits a balanced relative envelope and still requires all motion endpoints at Z=0. |
 | `dynamic-power-research` | One head-1 vector layer whose tab transform produces reduced positive marking power. It does not provide general speed-dependent or raster dynamic power. |
+
+The planned-path observations used the same operator-identified Boss LS2040
+and USB serial transport. A direct 10% coupon produced the expected five
+movements without visible marks. A direct 15% coupon produced five visible
+lines, and a separate 15% job generated end to end through Rayforge also
+produced five visible lines. Each used one `RasterSection` and ran at
+100 mm/s.
+
+The exact Rayforge observation was one layer with five alternating-direction
+marking events. Its Rayforge scan angle was configured to 45 degrees. The job
+used head-1 intent, 14.9972532503% encoded power, and an air-assist request of
+off. The Rayforge machine model used a top-right origin. The reviewed 538-byte
+program was transferred in one reported packet with zero reported retries.
+The transport provided no controller or execution acknowledgement; the
+operator observed five lines, more widely spaced and in the opposite diagonal
+direction from the direct reference job.
+
+This observation does not validate dimensional, angle, or power metrology. It
+also does not validate cross-hatch or additional sections, other planned
+paths, additional layers, variable-power, grayscale, or depth-map diagonal
+scans, other power or speed settings, laser-channel routing or additional
+heads, UDP transfer, or controller status monitoring. The physical air-assist
+state was not independently observed.
 
 The following remain unsupported for every profile:
 
