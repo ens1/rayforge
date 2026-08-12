@@ -19,3 +19,11 @@ def test_frozen_app_excludes_local_python_caches_and_addon_tests():
     )
     assert 'find "$APP_ROOT" -type d -name __pycache__ -prune' in script
     assert "-name '*.pyc' -o -name '*.pyo'" in script
+
+
+def test_frozen_app_force_installs_exact_git_revisions():
+    script = MAC_BUILD_SCRIPT.read_text()
+
+    assert "git\\+" in script
+    assert "--force-reinstall" in script
+    assert '--no-deps "$direct_requirement"' in script

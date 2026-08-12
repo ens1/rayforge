@@ -158,6 +158,15 @@ if [ "$(uname -s)" = "Darwin" ]; then
 fi
 
 "$VENV_PY" -m pip install --no-cache-dir -r "$TMP_REQUIREMENTS"
+while IFS= read -r direct_requirement; do
+    [ -n "$direct_requirement" ] || continue
+    "$VENV_PY" -m pip install --no-cache-dir --force-reinstall \
+        --no-deps "$direct_requirement"
+done < <(
+    grep -E \
+        '^[A-Za-z0-9_.-]+[[:space:]]+@[[:space:]]+git\+' \
+        "$TMP_REQUIREMENTS" || true
+)
 if [ "$(uname -s)" = "Darwin" ]; then
     "$VENV_PY" -m pip install --upgrade --force-reinstall \
         --only-binary=:all: \
