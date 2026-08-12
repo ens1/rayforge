@@ -1,0 +1,215 @@
+{
+  "schema": "ruida-re.hardware-air-assist-negative-observation.v1",
+  "identifier": "boss-ls2040-usb-serial-rayforge-air-assist-v1",
+  "observed_on": "2026-08-11",
+  "generating_revisions": {
+    "rayforge": "361f498d9c3adb6a682e150cc1a0b22c563c4871",
+    "raygeo": "5663bec8c5d47ebb7f3f09d6df0658f5bdac8583",
+    "ruida_re": "8c483cd17793d84a1cd83d80dc1d0760e6582cc8"
+  },
+  "scope": {
+    "description": "One supervised air-off motion control was inconclusive, and one explicitly approved standalone OFF-ON-OFF sequence produced no operator-observed physical response.",
+    "limitations": [
+      "The motion-control transfer summary proves one host packet with zero retries, not controller receipt, execution completion, or air state.",
+      "The standalone sequence proves three successful host writes and flushes, not controller receipt, command parsing, or output state.",
+      "USB serial provided no acknowledgement or state reply for any standalone command.",
+      "The 5.002178 second interval is a host monotonic measurement, not controller or pneumatic timing metrology.",
+      "No pneumatic, acoustic, electrical, optical, motion, pressure, flow, relay, or solenoid instrumentation was used.",
+      "The standalone commands were not embedded in a complete layer or job envelope, so the negative result does not validate or invalidate the full air-on motion artifact.",
+      "The operator-reported LightBurn failure was not accompanied by an artifact or transcript and supports only an inference that a machine-side condition may exist.",
+      "The cause of the absent physical response is not established.",
+      "The result does not justify standalone air control, encoder or compiler changes, or a broad controller-profile conclusion."
+    ]
+  },
+  "environment": {
+    "host_platform": "macOS",
+    "machine": "Boss LS2040",
+    "configured_controller_profile": "Ruida 644XS",
+    "transport": {
+      "kind": "USB serial",
+      "baud": 115200,
+      "magic": 136,
+      "controller_acknowledgement_available": false,
+      "state_acknowledgement_available": false,
+      "execution_acknowledgement_available": false
+    },
+    "physical_source_inhibited": false
+  },
+  "motion_artifacts": {
+    "air_off_control": {
+      "file": "boss-ls2040-proven-air-assist-off-control-15pct-100mms-x100-y75-offline-v1.rd",
+      "sha256": "b52bee4c14dd9a0346a77684904194ec08eea2e8336546e6368e635d203cca38",
+      "size_bytes": 580,
+      "checksum": 25935,
+      "records": 78,
+      "known_records": 78,
+      "opaque_records": 0,
+      "issues": [],
+      "exact_preserve_roundtrip": true,
+      "exact_recompute_roundtrip": true,
+      "air_operation": 18,
+      "controller_bounds_mm": {
+        "min_x": 100.0,
+        "min_y": 75.0,
+        "max_x": 120.0,
+        "max_y": 87.0
+      },
+      "process": {
+        "profile": "proven",
+        "kind": "vector",
+        "speed_mm_s": 100.0,
+        "requested_power_percent": 15.0,
+        "laser_enable_mask": 1,
+        "line_count": 5,
+        "line_length_mm": 20.0
+      }
+    },
+    "air_on_unsent": {
+      "file": "boss-ls2040-proven-air-assist-on-15pct-100mms-x100-y75-offline-v1.rd",
+      "sha256": "231e88b14ee36fb66d7ec1f28e5177df19a5309353bf4f54709f410ee9d23795",
+      "size_bytes": 580,
+      "checksum": 25936,
+      "records": 78,
+      "known_records": 78,
+      "opaque_records": 0,
+      "issues": [],
+      "exact_preserve_roundtrip": true,
+      "exact_recompute_roundtrip": true,
+      "air_operation": 19,
+      "controller_bounds_mm": {
+        "min_x": 100.0,
+        "min_y": 75.0,
+        "max_x": 120.0,
+        "max_y": 87.0
+      },
+      "process": {
+        "profile": "proven",
+        "kind": "vector",
+        "speed_mm_s": 100.0,
+        "requested_power_percent": 15.0,
+        "laser_enable_mask": 1,
+        "line_count": 5,
+        "line_length_mm": 20.0
+      }
+    },
+    "pair_difference": {
+      "semantic_difference": "one CA01 layer_control operation changes from 0x12 to 0x13",
+      "derived_difference": "the E505 file checksum changes from 25935 to 25936",
+      "geometry_power_speed_and_envelope_identical": true
+    }
+  },
+  "motion_control_transmission": {
+    "explicit_operator_approval": true,
+    "artifact_sha256": "b52bee4c14dd9a0346a77684904194ec08eea2e8336546e6368e635d203cca38",
+    "host_log": {
+      "scope": "host-side driver transfer summary",
+      "packets": 1,
+      "payload_bytes": 580,
+      "retries": 0,
+      "controller_acknowledgement": false,
+      "execution_acknowledgement": false
+    },
+    "operator_observation": {
+      "reported_verbatim": "I think it had air flow, but it's hard to tell with the sound of the motors.",
+      "instrumented_metrology": false,
+      "interpretation": "inconclusive"
+    }
+  },
+  "air_on_motion_transmission": {
+    "artifact_sha256": "231e88b14ee36fb66d7ec1f28e5177df19a5309353bf4f54709f410ee9d23795",
+    "transmitted": false,
+    "host_log": null,
+    "operator_observation": null
+  },
+  "standalone_sequence": {
+    "explicit_operator_approval": true,
+    "runtime": {
+      "ruida_re_revision": "8c483cd17793d84a1cd83d80dc1d0760e6582cc8",
+      "transport_api": "ruida-re SerialTransport and SerialLink",
+      "legacy_rayforge_ruida_client_used": false,
+      "job_or_layer_envelope_used": false,
+      "udp_packet_checksum_used": false
+    },
+    "commands": [
+      {
+        "stage": "pre_off",
+        "command": "layer_control",
+        "operation": 18,
+        "logical_hex": "ca0112",
+        "logical_sha256": "6ccaa2723dace0eb0f588b716f8f7c0270907335b4b822209c18beef5b66388a",
+        "wire_hex": "c4099b",
+        "wire_sha256": "8a12da2dea19cd5c2c622b1f4a3c0e3394732e42e77d75de2f0e8ec544db4ef3",
+        "wire_size_bytes": 3,
+        "host_write_and_flush_completed": true,
+        "retries": 0
+      },
+      {
+        "stage": "air_on",
+        "command": "layer_control",
+        "operation": 19,
+        "logical_hex": "ca0113",
+        "logical_sha256": "7a7714296df620cfa15f5628b4834e95737e6ec8b4d15b4bde26411fed713ed9",
+        "wire_hex": "c4091b",
+        "wire_sha256": "9185336f5f6b352c7ea94209ee3eb490d64351a8d7560b274699658fa10a5b4c",
+        "wire_size_bytes": 3,
+        "host_write_and_flush_completed": true,
+        "retries": 0
+      },
+      {
+        "stage": "final_off",
+        "command": "layer_control",
+        "operation": 18,
+        "logical_hex": "ca0112",
+        "logical_sha256": "6ccaa2723dace0eb0f588b716f8f7c0270907335b4b822209c18beef5b66388a",
+        "wire_hex": "c4099b",
+        "wire_sha256": "8a12da2dea19cd5c2c622b1f4a3c0e3394732e42e77d75de2f0e8ec544db4ef3",
+        "wire_size_bytes": 3,
+        "host_write_and_flush_completed": true,
+        "retries": 0
+      }
+    ],
+    "host_interval": {
+      "seconds": 5.002178,
+      "clock": "monotonic",
+      "scope": "host-side sequence timing only",
+      "controller_or_pneumatic_timing_metrology": false
+    },
+    "host_log": {
+      "scope": "three direct host serial writes and flushes",
+      "writes": 3,
+      "payload_bytes": 9,
+      "retries": 0,
+      "controller_acknowledgement": false,
+      "state_acknowledgement": false,
+      "execution_acknowledgement": false
+    },
+    "serialized_command_names": [
+      "layer_control",
+      "layer_control",
+      "layer_control"
+    ],
+    "motion_mark_laser_enable_power_dwell_and_pulse_commands": 0
+  },
+  "operator_observation": {
+    "reported_verbatim": "No motion or emission.\n\nNo change, no relay clicks, nothing. But lightburn also seems to have failed on this. I could have bad hardware. I would expect to hear a relay or solenoid click",
+    "instrumented_metrology": false,
+    "reported_lightburn_comparison_artifact_available": false
+  },
+  "result": {
+    "status": "scoped-standalone-air-control-negative-observation",
+    "physical_response": "not-operator-observed",
+    "motion": "not-operator-observed",
+    "laser_emission": "not-operator-observed",
+    "relay_or_solenoid_click": "not-operator-observed",
+    "controller_controlled_air_on_this_setup": "unavailable-or-inconclusive",
+    "standalone_ca01_air_semantics": "not-validated",
+    "full_job_air_on_semantics": "not-tested",
+    "air_off_motion_control": "inconclusive",
+    "air_on_motion_artifact": "not-transmitted",
+    "machine_side_fault": "operator-suggested-inference-only",
+    "causality": "not-established",
+    "encoder_or_compiler_change": "none",
+    "profile_promotion": "none",
+    "broad_profile_conclusion": "not-established"
+  }
+}
