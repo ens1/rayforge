@@ -615,11 +615,16 @@ class IntentBuilder:
             native = bool(self._machine.driver.native_overscan)
         except AttributeError:
             native = False
+        scan_strategy = getattr(step, "scan_strategy", "bidirectional")
+        bidir_x_offset_mm = (
+            float(getattr(step, "bidir_x_offset_mm", 0.0))
+            if scan_strategy == "bidirectional"
+            else 0.0
+        )
         settings = {
             "driver_native_overscan": native,
-            "bidir_x_offset_mm": float(
-                getattr(step, "bidir_x_offset_mm", 0.0)
-            ),
+            "bidir_x_offset_mm": bidir_x_offset_mm,
+            "scan_strategy": scan_strategy,
         }
         if step is not None:
             for name in ("power", "tab_power"):

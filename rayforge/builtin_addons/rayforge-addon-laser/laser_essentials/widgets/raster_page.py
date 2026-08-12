@@ -24,6 +24,7 @@ from rayforge.ui_gtk.shared.slider import create_slider, create_slider_row
 from .rows import LaserStepSettingsPage
 
 _SCAN_MODES = [ScanMode.SEGMENTED, ScanMode.FULL_SWEEP]
+_SCAN_STRATEGIES = ("bidirectional", "unidirectional")
 
 if TYPE_CHECKING:
     from rayforge.doceditor.editor import DocEditor
@@ -306,6 +307,24 @@ class RasterSettingsPage(LaserStepSettingsPage):
         )
         self._add(group, self.scan_mode_row)
 
+        self.scan_strategy_row = Adw.ComboRow(
+            title=_("Scan Direction"),
+            subtitle=_(
+                "Bidirectional alternates rows; unidirectional uses "
+                "dark return moves."
+            ),
+            model=Gtk.StringList.new(
+                [_("Bidirectional"), _("Unidirectional")]
+            ),
+        )
+        self.scan_strategy_row.set_selected(
+            _SCAN_STRATEGIES.index(self.step.scan_strategy)
+        )
+        self.scan_strategy_row.connect(
+            "notify::selected", self._on_scan_strategy_changed
+        )
+        self._add(group, self.scan_strategy_row)
+
         head = self.get_selected_head()
         laser = head if isinstance(head, LaserHead) else None
         default_line_interval_mm = laser.spot_size_mm[1] if laser else 0.1
@@ -397,6 +416,9 @@ class RasterSettingsPage(LaserStepSettingsPage):
             value_in_base=self.step.bidir_x_offset_mm,
         )
         self._add(group, self.bidir_x_offset_row)
+        self.bidir_x_offset_row.set_sensitive(
+            self.step.scan_strategy == "bidirectional"
+        )
         self.bidir_x_offset_row.value_changed.connect(
             lambda r: self._debounce(
                 self._on_bidir_x_offset_changed,
@@ -583,6 +605,13 @@ class RasterSettingsPage(LaserStepSettingsPage):
         selected_idx = row.get_selected()
         selected_mode = _SCAN_MODES[selected_idx]
         self._on_param_changed("scan_mode", selected_mode.name)
+
+    def _on_scan_strategy_changed(self, row, pspec):
+        selected_strategy = _SCAN_STRATEGIES[row.get_selected()]
+        self.bidir_x_offset_row.set_sensitive(
+            selected_strategy == "bidirectional"
+        )
+        self._on_param_changed("scan_strategy", selected_strategy)
 
     def _update_power_labels(self, invert: bool):
         """Update min/max power labels based on invert setting."""

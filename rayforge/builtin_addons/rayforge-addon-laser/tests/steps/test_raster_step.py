@@ -73,6 +73,7 @@ class TestEngraveStep:
             "offset_x_mm",
             "offset_y_mm",
             "scan_mode",
+            "scan_strategy",
             "cross_hatch",
             "num_depth_levels",
             "z_step_down",
@@ -94,6 +95,7 @@ class TestEngraveStep:
         step.min_power_level = 0.25
         step.max_power_level = 0.75
         step.scan_angle = angle
+        step.scan_strategy = "unidirectional"
         step.scan_mode = "FULL_SWEEP"
 
         metadata = step.get_process_metadata(machine)
@@ -115,7 +117,7 @@ class TestEngraveStep:
             "sample_power_encoding": "absolute_u8",
             "scan_angle_degrees": angle,
             "scan_axis": axis,
-            "scan_strategy": "bidirectional",
+            "scan_strategy": "unidirectional",
             "scan_mode": "full_sweep",
             "cross_hatch": False,
         }
@@ -124,12 +126,53 @@ class TestEngraveStep:
         step = EngraveStep(name="Test")
         step.scan_angle = 45.0
         step.depth_mode = "MULTI_PASS"
+        step.scan_strategy = "unidirectional"
         step.line_interval_mm = 0.2  # type: ignore[assignment]
         step.dot_width_correction_mm = 0.05  # type: ignore[assignment]
         data = step.to_dict()
         restored = EngraveStep.from_dict(data)
         assert data == restored.to_dict()
         assert restored.dot_width_correction_mm == 0.05
+        assert restored.scan_strategy == "unidirectional"
+
+    def test_missing_scan_strategy_defaults_to_bidirectional(self):
+        step = EngraveStep(name="Test")
+        data = step.to_dict()
+        data.pop("scan_strategy")
+
+        restored = EngraveStep.from_dict(data)
+
+        assert restored.scan_strategy == "bidirectional"
+
+    def test_unknown_scan_strategy_defaults_to_bidirectional(self):
+        step = EngraveStep(name="Test")
+        data = step.to_dict()
+        data["scan_strategy"] = "sideways"
+
+        restored = EngraveStep.from_dict(data)
+
+        assert restored.scan_strategy == "bidirectional"
+
+    @pytest.mark.parametrize(
+        ("bidirectional", "expected"),
+        [(True, "bidirectional"), (False, "unidirectional")],
+    )
+    def test_legacy_bidirectional_flag_migrates(
+        self,
+        bidirectional,
+        expected,
+    ):
+        step = EngraveStep(name="Test")
+        data = step.to_dict()
+        data.pop("scan_strategy")
+        data["opsproducer_dict"] = {
+            "type": "Rasterizer",
+            "params": {"bidirectional": bidirectional},
+        }
+
+        restored = EngraveStep.from_dict(data)
+
+        assert restored.scan_strategy == expected
 
     def test_legacy_power_keys_migrate(self):
         """Old files keyed the raster power range as min_power/max_power.
@@ -261,6 +304,20 @@ class TestEngraveComputePayload:
         assert spec.min_power == 0.1
         assert spec.max_power == 0.9
         assert spec.mode == "power_modulated"
+        assert spec.scan_strategy == "bidirectional"
+
+    def test_build_compute_payload_propagates_unidirectional(self, machine):
+        step = EngraveStep(name="engrave")
+        step.scan_strategy = "unidirectional"
+        wp = WorkPiece(name="wp")
+        wp.set_size(10.0, 10.0)
+
+        with patch.object(WorkPiece, "render_to_pixels", return_value=None):
+            _part, payload = step.build_compute_payload(machine, wp)
+
+        spec = payload.assembler.spec
+        assert isinstance(spec, RasterSpec)
+        assert spec.scan_strategy == "unidirectional"
 
     def test_assembler_token_params_mirrors_kwargs(self, machine):
         step = EngraveStep(name="engrave")

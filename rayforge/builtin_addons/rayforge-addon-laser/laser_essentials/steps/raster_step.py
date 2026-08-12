@@ -59,6 +59,9 @@ def _scan_axis(angle: float, cross_hatch: bool) -> str:
     return "arbitrary"
 
 
+_SCAN_STRATEGIES = ("bidirectional", "unidirectional")
+
+
 class EngraveStep(LaserStep):
     TYPELABEL = _("Engrave")
     ICON = "step-raster-symbolic"
@@ -78,6 +81,15 @@ class EngraveStep(LaserStep):
                     default=0.0,
                     min_val=0.0,
                     max_val=360.0,
+                ),
+                LabeledChoiceVar(
+                    key="scan_strategy",
+                    label=_("Scan Direction"),
+                    choices=[
+                        (_("Bidirectional"), "bidirectional"),
+                        (_("Unidirectional"), "unidirectional"),
+                    ],
+                    default="bidirectional",
                 ),
                 LabeledChoiceVar(
                     key="depth_mode",
@@ -115,6 +127,7 @@ class EngraveStep(LaserStep):
         super().__init__(typelabel=typelabel or self.TYPELABEL, name=name)
         self.power = 0.2
         self.scan_angle = 0.0
+        self.scan_strategy = "bidirectional"
         self.depth_mode = "POWER_MODULATION"
         self.invert = False
         self.auto_levels = True
@@ -176,7 +189,7 @@ class EngraveStep(LaserStep):
             "sample_power_encoding": "absolute_u8",
             "scan_angle_degrees": self.scan_angle,
             "scan_axis": _scan_axis(self.scan_angle, self.cross_hatch),
-            "scan_strategy": "bidirectional",
+            "scan_strategy": self.scan_strategy,
             "scan_mode": self.scan_mode.lower(),
             "cross_hatch": self.cross_hatch,
         }
@@ -220,6 +233,7 @@ class EngraveStep(LaserStep):
             "offset_x_mm": self.offset_x_mm,
             "offset_y_mm": self.offset_y_mm,
             "scan_mode": self.scan_mode.lower(),
+            "scan_strategy": self.scan_strategy,
             "cross_hatch": self.cross_hatch,
             "num_depth_levels": self.num_depth_levels,
             "z_step_down": self.z_step_down,
@@ -235,6 +249,7 @@ class EngraveStep(LaserStep):
             "dot_width_correction_mm",
             "line_interval_mm",
             "scan_angle",
+            "scan_strategy",
         ):
             if key in settings:
                 setattr(self, key, settings[key])
@@ -284,6 +299,7 @@ class EngraveStep(LaserStep):
             offset_x_mm=x_off,
             offset_y_mm=y_off,
             scan_mode=kwargs["scan_mode"],
+            scan_strategy=kwargs["scan_strategy"],
             cross_hatch=kwargs["cross_hatch"],
             num_depth_levels=kwargs["num_depth_levels"],
             z_step_down=kwargs["z_step_down"],
@@ -303,6 +319,7 @@ class EngraveStep(LaserStep):
     def to_dict(self) -> dict:
         result = super().to_dict()
         result["scan_angle"] = self.scan_angle
+        result["scan_strategy"] = self.scan_strategy
         result["depth_mode"] = self.depth_mode
         result["invert"] = self.invert
         result["auto_levels"] = self.auto_levels
@@ -341,6 +358,22 @@ class EngraveStep(LaserStep):
         elif old_type == "DitherRasterizer":
             legacy["depth_mode"] = "DITHER"
         step.scan_angle = data.get("scan_angle", legacy.get("scan_angle", 0.0))
+        legacy_strategy = legacy.get("scan_strategy")
+        if legacy_strategy is None and "bidirectional" in legacy:
+            legacy_strategy = (
+                "bidirectional"
+                if legacy["bidirectional"]
+                else "unidirectional"
+            )
+        scan_strategy = data.get(
+            "scan_strategy",
+            legacy_strategy or "bidirectional",
+        )
+        step.scan_strategy = (
+            scan_strategy
+            if scan_strategy in _SCAN_STRATEGIES
+            else "bidirectional"
+        )
         step.depth_mode = data.get(
             "depth_mode", legacy.get("depth_mode", "POWER_MODULATION")
         )
@@ -423,6 +456,7 @@ class EngraveStep(LaserStep):
         return super()._serialized_keys() | frozenset(
             {
                 "scan_angle",
+                "scan_strategy",
                 "depth_mode",
                 "invert",
                 "auto_levels",

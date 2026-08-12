@@ -66,6 +66,19 @@ def _count_cuts(ops: Ops) -> int:
     return sum(1 for i in range(ops.len()) if ops.is_cutting(i))
 
 
+def test_unidirectional_raster_disables_path_flipping():
+    optimizer = Optimize(allow_flip=True)
+
+    spec = optimizer.to_spec(
+        None,
+        None,
+        {"scan_strategy": "unidirectional"},
+    )
+
+    assert spec.allow_flip is False
+    assert optimizer.allow_flip is True
+
+
 @pytest.fixture
 def ctx(mock_progress_context) -> object:
     """Provides a dummy execution context for functions that require it."""

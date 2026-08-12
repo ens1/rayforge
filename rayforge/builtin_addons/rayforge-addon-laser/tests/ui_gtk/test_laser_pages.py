@@ -1,7 +1,7 @@
 # flake8: noqa: E402
 """UI tests for the laser step settings pages."""
 
-from typing import Any
+from typing import Any, cast
 
 import gi
 import pytest
@@ -10,6 +10,7 @@ gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 
 from gi.repository import Adw
+from laser_essentials.steps import EngraveStep
 from laser_essentials.widgets.contour_page import (
     ContourStepSettingsPage,
     ThresholdRow,
@@ -221,6 +222,32 @@ def test_raster_page_builds(editor, laser_machine, ui_context):
     assert step_cls is not None
     page = RasterSettingsPage(editor, step_cls.create(ui_context))
     assert isinstance(page, StepSettingsPage)
+
+
+@pytest.mark.ui
+def test_raster_scan_direction_updates_step_and_offset_sensitivity(
+    editor,
+    laser_machine,
+    ui_context,
+):
+    step_cls = step_registry.get("EngraveStep")
+    assert step_cls is not None
+    step = cast(EngraveStep, step_cls.create(ui_context))
+    page = RasterSettingsPage(editor, step)
+
+    assert step.scan_strategy == "bidirectional"
+    assert page.scan_strategy_row.get_selected() == 0
+    assert page.bidir_x_offset_row.get_sensitive() is True
+
+    page.scan_strategy_row.set_selected(1)
+
+    assert step.scan_strategy == "unidirectional"
+    assert page.bidir_x_offset_row.get_sensitive() is False
+
+    page.scan_strategy_row.set_selected(0)
+
+    assert step.scan_strategy == "bidirectional"
+    assert page.bidir_x_offset_row.get_sensitive() is True
 
 
 @pytest.mark.ui

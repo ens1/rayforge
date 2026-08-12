@@ -1,4 +1,4 @@
-raygeo @ git+https://github.com/ens1/raygeo.git@5663bec8c5d47ebb7f3f09d6df0658f5bdac8583
+raygeo @ git+https://github.com/ens1/raygeo.git@e21f48c5eb54ebb41b0318b84b62a778005c1f37
 ruida-re @ git+https://github.com/ens1/ruida-re.git@8c483cd17793d84a1cd83d80dc1d0760e6582cc8 ; python_version >= "3.11"
 aiohttp==3.14.3
 asyncudp==0.11.0

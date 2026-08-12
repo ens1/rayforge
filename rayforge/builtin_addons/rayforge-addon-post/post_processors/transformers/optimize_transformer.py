@@ -50,8 +50,11 @@ class Optimize(OpsTransformer):
         stock_geometries: list["Geometry"] | None,
         settings: dict[str, Any] | None,
     ) -> OptimizeSpec:
+        allow_flip = self.allow_flip
+        if settings and settings.get("scan_strategy") == "unidirectional":
+            allow_flip = False
         return OptimizeSpec(
-            allow_flip=self.allow_flip,
+            allow_flip=allow_flip,
             preserve_first=self.preserve_first,
             preserve_order=list(self.preserve_order),
         )

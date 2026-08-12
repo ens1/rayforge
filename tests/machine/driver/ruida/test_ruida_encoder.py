@@ -725,6 +725,142 @@ def test_engrave_pipeline_chunks_long_native_raster_marks(
     assert expected_travel_targets <= decoded_travel_targets
 
 
+@pytest.mark.parametrize(
+    (
+        "angle",
+        "scan_strategy",
+        "expected_axis",
+        "expected_mode",
+        "expected_control",
+    ),
+    [
+        pytest.param(
+            0.0,
+            "unidirectional",
+            "horizontal",
+            1,
+            2,
+            id="horizontal-unidirectional",
+        ),
+        pytest.param(
+            0.0,
+            "bidirectional",
+            "horizontal",
+            2,
+            1,
+            id="horizontal-bidirectional",
+        ),
+        pytest.param(
+            90.0,
+            "unidirectional",
+            "vertical",
+            3,
+            4,
+            id="vertical-unidirectional",
+        ),
+        pytest.param(
+            90.0,
+            "bidirectional",
+            "vertical",
+            4,
+            3,
+            id="vertical-bidirectional",
+        ),
+    ],
+)
+def test_engrave_pipeline_preserves_strategy_and_ruida_metadata(
+    engrave_step_class,
+    test_machine_and_config,
+    mocker,
+    angle,
+    scan_strategy,
+    expected_axis,
+    expected_mode,
+    expected_control,
+):
+    machine, context = test_machine_and_config
+    machine.hydrate()
+    step = engrave_step_class.create(context, name="Raster engrave")
+    step.power = 0.2
+    step.depth_mode = "CONSTANT_POWER"
+    step.auto_levels = False
+    step.scan_strategy = scan_strategy
+    step.scan_angle = angle
+    step.sample_interval_mm = 0.5
+    step.line_interval_mm = 0.5
+    step.dot_width_correction_mm = 0.0
+    step.scan_mode = "FULL_SWEEP"
+    mocker.patch.object(
+        WorkPiece,
+        "render_to_pixels",
+        autospec=True,
+        side_effect=_opaque_black_surface,
+    )
+    workpiece = WorkPiece(name="raster image")
+    workpiece.set_size(3, 2)
+    workpiece.pos = (20, 20)
+    doc = Doc()
+    workflow = doc.active_layer.workflow
+    assert workflow is not None
+    workflow.add_child(step)
+    doc.active_layer.add_child(workpiece)
+
+    completed = {}
+    execute_stages(
+        IntentBuilder(machine=machine, generation_id=1).build(doc),
+        lambda node: completed.__setitem__(node.key, node),
+    )
+    machine_node = completed[job_machinexform_key()]
+    assert machine_node.error is None, machine_node.error
+    ops = machine_node.output.ops
+    plan = RuidaOpsAdapter(machine).build_plan(ops)
+
+    assert len(plan.layers) == 1
+    layer = plan.layers[0]
+    assert layer.scan_axis == expected_axis
+    assert layer.raster_strategy == scan_strategy
+    marks = [event for event in layer.events if isinstance(event, MarkTo)]
+    assert len(marks) > 2
+    mark_deltas = []
+    previous = None
+    for event in layer.events:
+        if isinstance(event, TravelTo):
+            previous = event
+        elif isinstance(event, MarkTo):
+            assert previous is not None
+            mark_deltas.append(
+                (
+                    event.x_mm - previous.x_mm,
+                    event.y_mm - previous.y_mm,
+                )
+            )
+            previous = event
+    axis_deltas = [
+        delta[0] if expected_axis == "horizontal" else delta[1]
+        for delta in mark_deltas
+    ]
+    directions = {value > 0 for value in axis_deltas}
+    if scan_strategy == "unidirectional":
+        assert len(directions) == 1
+        assert sum(
+            isinstance(event, TravelTo) for event in layer.events
+        ) >= len(marks)
+    else:
+        assert directions == {False, True}
+
+    result = RuidaEncoder().encode(ops, machine, doc)
+    records = _records(result.payload)
+    assert _values(records, "layer_mode_or_attributes") == [
+        {"layer": 0, "value": expected_mode}
+    ]
+    assert _values(records, "layer_control") == [
+        {"operation": expected_control},
+        {"operation": 48},
+        {"operation": 16},
+        {"operation": 18},
+    ]
+
+
 def test_rotated_engrave_resolves_machine_axis_and_round_trips_rd(
     engrave_step_class,
     test_machine_and_config,

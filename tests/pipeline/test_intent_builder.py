@@ -35,6 +35,7 @@ from raygeo.ops.convert import Encoder, GcodeSpec
 from raygeo.ops.part import Part
 from raygeo.ops.state import AirAssistMode
 from raygeo.ops.transform.bidir_scan_offset import BidirScanOffsetSpec
+from raygeo.ops.transform.optimize import OptimizeSpec
 from raygeo.ops.transform.tabs import TabsSpec
 from raygeo.ops.types import CommandType
 from raygeo.pipeline.execute import Pipeline as RaygeoPipeline
@@ -1509,6 +1510,38 @@ def test_raster_bidir_offset_reaches_transformer_spec(
     settings = builder._transformer_settings(step)
     assert settings is not None
     assert "driver_native_overscan" in settings
+
+
+def test_unidirectional_raster_disables_bidirectional_offset(
+    engrave_step_class, test_machine_and_config
+):
+    machine, context = test_machine_and_config
+    step = engrave_step_class.create(context, name="engrave")
+    step.scan_strategy = "unidirectional"
+    step.bidir_x_offset_mm = 0.375
+    wp = WorkPiece(name="wp")
+    wp.set_size(10.0, 10.0)
+    doc = _make_doc(step, wp)
+
+    builder = IntentBuilder(machine=machine)
+    nodes = builder.build(doc)
+    wpk = workpiece_key(wp.uid, step.uid)
+    wp_node = next(n for n in nodes if n.key == wpk)
+    payload = wp_node.stage.params
+    spec = next(
+        item
+        for item in payload.transformers
+        if isinstance(item, BidirScanOffsetSpec)
+    )
+    optimize = next(
+        item for item in payload.transformers if isinstance(item, OptimizeSpec)
+    )
+
+    assert spec.offset_mm == 0.0
+    assert optimize.allow_flip is False
+    settings = builder._transformer_settings(step)
+    assert settings is not None
+    assert settings["scan_strategy"] == "unidirectional"
 
 
 def test_contour_power_settings_reach_tabs_transformer_spec(
