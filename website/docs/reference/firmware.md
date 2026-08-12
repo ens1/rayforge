@@ -557,6 +557,31 @@ does not establish calibrated power, distinguish the positive modulation
 levels optically, prove zero output in the gap, validate another row or scan
 mode, or promote broader compatibility.
 
+##### Native ordinary raster-matrix observation
+
+One exact Rayforge-generated two-layer ordinary raster matrix was transferred
+once to the operator-identified Boss LS2040 over USB serial at requested 20%
+power and 100 mm/s. The operator had replaced the cardboard with a blank piece
+while retaining the reported top-right 0,0 origin. The exact controller bounds
+begin at X 76.2 and Y 76.2 mm, corresponding to the requested placement about
+3 inches from that origin.
+
+Layer 0 contains three broken horizontal bidirectional rows using only `AA`
+marking chunks. Layer 1 contains three broken vertical bidirectional columns
+using only `AB` marking chunks. Every marked chunk is no longer than 4 mm,
+the gaps use travel motion, and no `C7`, `C2`, `A8`, or `A9` opcode appears.
+The host reported one packet and zero retries, with no controller or execution
+acknowledgement. When asked to confirm the two expected patterns, clean gaps,
+and absence of unexpected motion or marking, the operator reported, "Yes, that
+is what I see".
+
+The exact artifact and scoped report are retained in the
+[`ordinary-raster-matrix` evidence manifest](../../../tests/machine/driver/ruida/fixtures/hardware/boss-ls2040-usb-serial-rayforge-ordinary-raster-matrix-v1/manifest-v1.json).
+The decoded geometry and quantized power are not physical measurements. This
+result does not prove zero optical output in the gaps, exercise unidirectional
+or variable-power raster, validate other settings, or promote broader
+compatibility.
+
 #### Evidence-limited research profiles
 
 Each profile must be selected explicitly in the Ruida driver settings. Every

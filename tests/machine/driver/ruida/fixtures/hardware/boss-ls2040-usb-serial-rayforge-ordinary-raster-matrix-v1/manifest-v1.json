@@ -1,0 +1,236 @@
+{
+  "schema": "ruida-re.hardware-ordinary-raster-matrix-observation.v1",
+  "identifier": "boss-ls2040-usb-serial-rayforge-ordinary-raster-matrix-v1",
+  "observed_on": "2026-08-11",
+  "generating_revisions": {
+    "rayforge": "361f498d9c3adb6a682e150cc1a0b22c563c4871",
+    "raygeo": "5663bec8c5d47ebb7f3f09d6df0658f5bdac8583",
+    "ruida_re": "8c483cd17793d84a1cd83d80dc1d0760e6582cc8"
+  },
+  "scope": {
+    "description": "One supervised execution of an exact Rayforge-generated ordinary cardinal-raster matrix produced the operator-reported expected horizontal- and vertical-bidirectional patterns.",
+    "limitations": [
+      "The host transfer summary proves one packet with zero retries, not controller receipt or execution completion.",
+      "The observation was visual and had no dimensional, optical-power, electrical, timing, or motion sensor instrumentation.",
+      "The exact controller bounds, mark lengths, gap lengths, and line spacing are decoded serialization facts, not operator-measured physical dimensions.",
+      "The clean-looking gaps do not establish zero optical output during travel.",
+      "The artifact contains constant power and no C7 or C2 immediate modulation, so it provides no variable-power or grayscale raster evidence.",
+      "The artifact exercises horizontal and vertical bidirectional raster only; it provides no unidirectional-raster evidence.",
+      "The result is scoped to this exact matrix, placement, machine, material, settings, and transfer and does not establish other powers, speeds, layers, controllers, transports, or broad profile compatibility."
+    ]
+  },
+  "environment": {
+    "host_platform": "macOS",
+    "machine": "Boss LS2040",
+    "configured_controller_profile": "Ruida 644XS",
+    "transport": {
+      "kind": "USB serial",
+      "baud": 115200,
+      "controller_acknowledgement_available": false,
+      "execution_acknowledgement_available": false
+    },
+    "material": {
+      "description": "blank replacement cardboard",
+      "dimensions_mm": null,
+      "dimensions_reconfirmed_for_this_run": false,
+      "reported_origin": {
+        "corner": "top_right",
+        "x_mm": 0.0,
+        "y_mm": 0.0
+      }
+    },
+    "physical_source_inhibited": false
+  },
+  "placement": {
+    "operator_request": "approximately 3 inches in both physical directions from the top-right 0,0 origin",
+    "controller_offset_from_origin_mm": {
+      "x": 76.2,
+      "y": 76.2
+    },
+    "controller_coordinate_mapping": "The operator described the physical direction as -3 inches in X and Y; the top-right-origin controller placement used positive 76.2 mm X and Y bounds.",
+    "physical_placement_metrology": "not-performed"
+  },
+  "process": {
+    "profile": "proven",
+    "kind": "raster",
+    "raster_processing": "native",
+    "power_mode": "constant",
+    "speed_mm_s": 100.0,
+    "requested_power_percent": 20.0,
+    "encoded_power_percent": 20.002441555270707,
+    "air_assist_requested": false,
+    "laser_enable_mask_by_layer": [
+      1,
+      1
+    ],
+    "controller_bounds_mm": {
+      "min_x": 76.2,
+      "min_y": 76.2,
+      "max_x": 88.2,
+      "max_y": 106.148
+    },
+    "layers": [
+      {
+        "index": 0,
+        "scan_axis": "horizontal",
+        "raster_strategy": "bidirectional",
+        "layer_mode": 2,
+        "layer_operation": 1,
+        "controller_bounds_mm": {
+          "min_x": 76.2,
+          "min_y": 76.2,
+          "max_x": 88.2,
+          "max_y": 80.2
+        },
+        "expected_visible_pattern": "three broken horizontal rows",
+        "row_directions": [
+          1,
+          -1,
+          1
+        ],
+        "mark_lengths_per_row_mm": [
+          5.0,
+          5.0
+        ],
+        "gap_length_per_row_mm": 2.0,
+        "row_spacing_mm": 2.0
+      },
+      {
+        "index": 1,
+        "scan_axis": "vertical",
+        "raster_strategy": "bidirectional",
+        "layer_mode": 4,
+        "layer_operation": 3,
+        "controller_bounds_mm": {
+          "min_x": 79.108,
+          "min_y": 86.148,
+          "max_x": 83.108,
+          "max_y": 106.148
+        },
+        "expected_visible_pattern": "three broken vertical columns",
+        "column_directions": [
+          1,
+          -1,
+          1
+        ],
+        "physical_mark_lengths_per_column_mm": [
+          7.5,
+          8.4
+        ],
+        "gap_length_per_column_mm": 4.1,
+        "column_spacing_mm": 2.0
+      }
+    ],
+    "wire_motion": {
+      "move_absolute_records": 2,
+      "move_horizontal_records": 5,
+      "move_vertical_records": 5,
+      "cut_horizontal_records": 12,
+      "cut_vertical_records": 15,
+      "cut_horizontal_opcode": "aa",
+      "cut_vertical_opcode": "ab",
+      "horizontal_signed_chunk_lengths_mm": [
+        4.0,
+        1.0,
+        4.0,
+        1.0,
+        -4.0,
+        -1.0,
+        -4.0,
+        -1.0,
+        4.0,
+        1.0,
+        4.0,
+        1.0
+      ],
+      "vertical_signed_chunk_lengths_mm": [
+        4.0,
+        3.5,
+        4.0,
+        4.0,
+        0.4,
+        -4.0,
+        -4.0,
+        -0.4,
+        -4.0,
+        -3.5,
+        4.0,
+        3.5,
+        4.0,
+        4.0,
+        0.4
+      ],
+      "maximum_absolute_mark_chunk_length_mm": 4.0,
+      "forbidden_records_absent": [
+        "cut_absolute",
+        "cut_relative",
+        "immediate_power_1",
+        "immediate_power_2",
+        "immediate_power_3",
+        "additional_delay",
+        "pulse",
+        "z_offset_delta",
+        "layer_frequency",
+        "layer_fiber_pulse_width"
+      ],
+      "forbidden_opcodes_absent": [
+        "a8",
+        "a9",
+        "c7",
+        "c2",
+        "c610",
+        "c611",
+        "8003"
+      ]
+    }
+  },
+  "artifact": {
+    "file": "boss-ls2040-proven-ordinary-raster-matrix-20pct-100mms-x76p2-y76p2-offline-v3.rd",
+    "sha256": "bca7ea59721450e38bfef513ec95ca3a6db5d3fec1987664858848523349c6c4",
+    "size_bytes": 746,
+    "checksum": 40137,
+    "records": 131,
+    "known_records": 131,
+    "opaque_records": 0,
+    "issues": [],
+    "exact_preserve_roundtrip": true,
+    "exact_recompute_roundtrip": true
+  },
+  "transmission": {
+    "explicit_operator_approval": true,
+    "artifact_sha256": "bca7ea59721450e38bfef513ec95ca3a6db5d3fec1987664858848523349c6c4",
+    "host_log": {
+      "scope": "host-side driver transfer summary",
+      "packets": 1,
+      "payload_bytes": 746,
+      "retries": 0,
+      "controller_acknowledgement": false,
+      "execution_acknowledgement": false
+    }
+  },
+  "operator_observation": {
+    "prompt_context": "At the relocated position approximately 3 inches from the top-right origin, the operator was asked to confirm three broken horizontal rows, three broken vertical columns, clean gaps without connector burns, and no unexpected motion, dots, or excess burning.",
+    "reported_verbatim": "Yes, that is what I see",
+    "instrumented_metrology": false
+  },
+  "result": {
+    "status": "scoped-ordinary-cardinal-bidirectional-raster-matrix-pass",
+    "horizontal_bidirectional_raster": {
+      "status": "operator-observed-pass",
+      "scope": "the expected three-broken-row appearance of layer 0 in this exact artifact"
+    },
+    "vertical_bidirectional_raster": {
+      "status": "operator-observed-pass",
+      "scope": "the expected three-broken-column appearance of layer 1 in this exact artifact"
+    },
+    "clean_gap_appearance": "operator-observed",
+    "unexpected_motion_or_marking": "not-operator-observed",
+    "dimensional_metrology": "not-performed",
+    "power_metrology": "not-performed",
+    "gap_zero_optical_output": "not-established",
+    "unidirectional_raster": "not-tested",
+    "variable_power_or_grayscale_raster": "not-tested-by-this-artifact",
+    "profile_promotion": "none",
+    "broad_profile_conclusion": "not-established"
+  }
+}

@@ -139,6 +139,16 @@ travel gap. This is scoped visual evidence for that artifact, not dimensional
 or power metrology, proof of zero optical output in the gap, or broad raster
 compatibility.
 
+A separate exact two-layer ordinary raster matrix at requested 20% power and
+100 mm/s exercised horizontal and vertical bidirectional native raster. Its
+marked motion used only `AA` and `AB` chunks no longer than 4 mm, and its gaps
+used travel motion. After the supervised transfer, the operator confirmed the
+expected three broken horizontal rows and three broken vertical columns. The
+[scoped matrix manifest](tests/machine/driver/ruida/fixtures/hardware/boss-ls2040-usb-serial-rayforge-ordinary-raster-matrix-v1/manifest-v1.json)
+binds that observation to the exact artifact. It is not dimensional or power
+metrology, proof of zero optical output in the gaps, or unidirectional-raster
+evidence.
+
 Four one-layer dynamic-vector coupons were also run on that machine at
 100 mm/s. The first, planned as 15%-10%-15%, looked solid and did not establish
 that power changed. On a longer 15%-5%-15% coupon, the operator observed good
