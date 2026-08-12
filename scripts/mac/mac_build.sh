@@ -700,6 +700,15 @@ with path.open("wb") as destination:
     plistlib.dump(info, destination)
 PY
 
+    # Source data copied into the bundle can contain caches from local test
+    # runs. They are not needed at runtime and can expose build-machine paths.
+    find "$RES_DIR/rayforge/builtin_addons" -type d -name tests -prune \
+        -exec rm -rf {} +
+    find "$APP_ROOT" -type d -name __pycache__ -prune \
+        -exec rm -rf {} +
+    find "$APP_ROOT" -type f \( -name '*.pyc' -o -name '*.pyo' \) \
+        -delete
+
     # Re-sign after install_name_tool, dylib, and plist rewrites to keep
     # macOS code-signing validation valid on Apple Silicon.
     if [ "$(uname -m)" = "arm64" ]; then
