@@ -106,7 +106,7 @@ workdir = "."
 
 [pypi-options.dependency-overrides]
 raygeo = { git = "https://github.com/ens1/raygeo.git", rev = "e21f48c5eb54ebb41b0318b84b62a778005c1f37" }
-ruida-re = { git = "https://github.com/ens1/ruida-re.git", rev = "8c483cd17793d84a1cd83d80dc1d0760e6582cc8" }
+ruida-re = { git = "https://github.com/ens1/ruida-re.git", rev = "fca3053d0a1409aaab6cd46326461bcf181f0243" }
 
 [tasks]
 pre-commit-install = "pre-commit install"
