@@ -149,19 +149,21 @@ binds that observation to the exact artifact. It is not dimensional or power
 metrology, proof of zero optical output in the gaps, or unidirectional-raster
 evidence.
 
-Air-assist control remains unavailable or inconclusive on the tested Boss
-LS2040 setup. An exact air-off motion control produced an ambiguous operator
-report of possible airflow masked by motor noise; its paired air-on motion
-artifact was never sent. A separately approved standalone `CA01` OFF-ON-OFF
-sequence contained no motion, marking, or laser-enable commands and used a
+Normal full-layer job-context air assist has a scoped positive observation on
+the tested Boss LS2040. An exact air-off motion control produced an ambiguous
+operator report of possible airflow masked by motor noise. Its paired 580-byte
+air-on motion artifact was then transferred once with one host packet and zero
+retries; the operator reported, "Air assist is confirmed, I felt the solenoid
+turn on then off". A separately approved standalone `CA01` OFF-ON-OFF sequence
+contained no motion, marking, or laser-enable commands and used a
 5.002178-second host interval. All three USB-serial writes and flushes
 completed, but the operator reported no change or relay/solenoid click. The
 [scoped air-assist manifest](tests/machine/driver/ruida/fixtures/hardware/boss-ls2040-usb-serial-rayforge-air-assist-v1/manifest-v1.json)
 records the exact bytes and observations. Serial provided no controller or
-state acknowledgement, and the operator also reported that LightBurn appeared
-to fail, so a machine-side issue is plausible but causality is not established.
-This result does not validate standalone air control or change encoder or
-compiler behavior.
+state acknowledgement. The full-layer result is tactile operator evidence, not
+pressure, flow, timing, relay-routing, current, or electrical metrology, and it
+does not establish other controllers or UDP. It does not validate the
+standalone sequence as a manual toggle or change encoder or compiler behavior.
 
 Four one-layer dynamic-vector coupons were also run on that machine at
 100 mm/s. The first, planned as 15%-10%-15%, looked solid and did not establish

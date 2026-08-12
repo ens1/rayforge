@@ -29,7 +29,7 @@ ARTIFACTS = {
         ),
         "b52bee4c14dd9a0346a77684904194ec08eea2e8336546e6368e635d203cca38",
     ),
-    "air_on_unsent": (
+    "air_on_confirmed": (
         "boss-ls2040-proven-air-assist-on-15pct-100mms-x100-y75-offline-v1.rd",
         "231e88b14ee36fb66d7ec1f28e5177df19a5309353bf4f54709f410ee9d23795",
     ),
@@ -79,7 +79,7 @@ def test_motion_artifacts_are_content_addressed_and_exact() -> None:
         "README.md",
         "manifest-v1.json",
         ARTIFACTS["air_off_control"][0],
-        ARTIFACTS["air_on_unsent"][0],
+        ARTIFACTS["air_on_confirmed"][0],
     }
     for key, (filename, expected_digest) in ARTIFACTS.items():
         raw, program, records = _program(key)
@@ -106,7 +106,7 @@ def test_motion_artifacts_are_content_addressed_and_exact() -> None:
 
 def test_motion_pair_changes_only_air_state_and_checksum() -> None:
     _, _, off = _program("air_off_control")
-    _, _, on = _program("air_on_unsent")
+    _, _, on = _program("air_on_confirmed")
     differences = [
         (index, left.name, left.values, right.values)
         for index, (left, right) in enumerate(zip(off, on, strict=True))
@@ -177,12 +177,13 @@ def test_standalone_sequence_is_only_exact_layer_controls() -> None:
     )
 
 
-def test_negative_observation_and_claims_remain_scoped() -> None:
+def test_air_observations_and_claims_remain_scoped() -> None:
     manifest = _manifest()
     motion = manifest["motion_control_transmission"]
     standalone = manifest["standalone_sequence"]
     result = manifest["result"]
 
+    assert manifest["schema"] == "ruida-re.hardware-air-assist-observation.v1"
     assert motion["host_log"] == {
         "scope": "host-side driver transfer summary",
         "packets": 1,
@@ -196,7 +197,31 @@ def test_negative_observation_and_claims_remain_scoped() -> None:
         "the motors."
     )
     assert motion["operator_observation"]["interpretation"] == "inconclusive"
-    assert manifest["air_on_motion_transmission"]["transmitted"] is False
+    air_on = manifest["air_on_motion_transmission"]
+    assert air_on == {
+        "explicit_operator_approval": True,
+        "artifact_sha256": (
+            "231e88b14ee36fb66d7ec1f28e5177df19a5309353bf4f54709f410ee9d23795"
+        ),
+        "transmitted": True,
+        "driver": "stock Rayforge RuidaSerialDriver",
+        "host_log": {
+            "scope": "host-side driver transfer summary",
+            "packets": 1,
+            "payload_bytes": 580,
+            "retries": 0,
+            "controller_acknowledgement": False,
+            "execution_acknowledgement": False,
+        },
+        "operator_observation": {
+            "reported_verbatim": (
+                "Air assist is confirmed, I felt the solenoid turn on then off"
+            ),
+            "instrumented_metrology": False,
+            "observation_mode": "operator tactile observation",
+            "interpretation": "scoped full-layer job-context pass",
+        },
+    }
     assert standalone["host_interval"] == {
         "seconds": 5.002178,
         "clock": "monotonic",
@@ -212,18 +237,36 @@ def test_negative_observation_and_claims_remain_scoped() -> None:
         "state_acknowledgement": False,
         "execution_acknowledgement": False,
     }
-    assert manifest["operator_observation"]["reported_verbatim"] == (
+    assert manifest["standalone_operator_observation"][
+        "reported_verbatim"
+    ] == (
         "No motion or emission.\n\nNo change, no relay clicks, nothing. But "
         "lightburn also seems to have failed on this. I could have bad "
         "hardware. I would expect to hear a relay or solenoid click"
     )
-    assert result["controller_controlled_air_on_this_setup"] == (
-        "unavailable-or-inconclusive"
+    assert result["status"] == (
+        "scoped-full-layer-air-assist-pass-with-standalone-negative-observation"
     )
-    assert result["standalone_ca01_air_semantics"] == "not-validated"
-    assert result["full_job_air_on_semantics"] == "not-tested"
-    assert result["machine_side_fault"] == "operator-suggested-inference-only"
-    assert result["causality"] == "not-established"
+    assert result["controller_controlled_air_on_this_setup"] == (
+        "scoped-full-layer-job-observed-pass"
+    )
+    assert result["standalone_ca01_air_semantics"] == (
+        "no-response-inconclusive-not-supported"
+    )
+    assert result["full_job_air_on_semantics"] == (
+        "operator-observed-pass-for-exact-artifact"
+    )
+    assert result["air_assist_timing_metrology"] == "not-performed"
+    assert result["pressure_or_flow_metrology"] == "not-performed"
+    assert result["relay_routing_current_or_electrical_validation"] == (
+        "not-performed"
+    )
+    assert result["other_controllers_or_firmware"] == "not-tested"
+    assert result["udp_transport"] == "not-tested"
+    assert result["standalone_machine_side_fault"] == (
+        "operator-suggested-inference-only"
+    )
+    assert result["standalone_no_response_causality"] == "not-established"
     assert result["encoder_or_compiler_change"] == "none"
     assert result["profile_promotion"] == "none"
     assert result["broad_profile_conclusion"] == "not-established"
@@ -247,4 +290,11 @@ def test_manifest_and_documentation_contain_no_private_identifiers() -> None:
     ):
         assert private_value not in serialized
     assert "do not establish causality" in documented
-    assert "remains unavailable or inconclusive" in documented
+    assert (
+        "scoped pass for normal full-layer job-context air assist"
+        in documented
+    )
+    assert (
+        "does not make the standalone sequence a supported manual toggle"
+        in (documented)
+    )

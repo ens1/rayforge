@@ -1,5 +1,5 @@
 {
-  "schema": "ruida-re.hardware-air-assist-negative-observation.v1",
+  "schema": "ruida-re.hardware-air-assist-observation.v1",
   "identifier": "boss-ls2040-usb-serial-rayforge-air-assist-v1",
   "observed_on": "2026-08-11",
   "generating_revisions": {
@@ -8,16 +8,19 @@
     "ruida_re": "8c483cd17793d84a1cd83d80dc1d0760e6582cc8"
   },
   "scope": {
-    "description": "One supervised air-off motion control was inconclusive, and one explicitly approved standalone OFF-ON-OFF sequence produced no operator-observed physical response.",
+    "description": "One supervised air-off motion control was inconclusive, one standalone OFF-ON-OFF sequence produced no operator-observed response, and one full normal-layer air-on job produced operator-confirmed solenoid actuation on and off.",
     "limitations": [
       "The motion-control transfer summary proves one host packet with zero retries, not controller receipt, execution completion, or air state.",
+      "The air-on full-layer transfer summary proves one host packet with zero retries, not controller receipt or execution completion.",
       "The standalone sequence proves three successful host writes and flushes, not controller receipt, command parsing, or output state.",
       "USB serial provided no acknowledgement or state reply for any standalone command.",
       "The 5.002178 second interval is a host monotonic measurement, not controller or pneumatic timing metrology.",
       "No pneumatic, acoustic, electrical, optical, motion, pressure, flow, relay, or solenoid instrumentation was used.",
-      "The standalone commands were not embedded in a complete layer or job envelope, so the negative result does not validate or invalidate the full air-on motion artifact.",
+      "The standalone commands were not embedded in a complete layer or job envelope; their no-response observation does not invalidate the separately successful full-layer job.",
       "The operator-reported LightBurn failure was not accompanied by an artifact or transcript and supports only an inference that a machine-side condition may exist.",
       "The cause of the absent physical response is not established.",
+      "The full-layer observation establishes only tactile operator-observed solenoid actuation for this exact artifact and setup, not air pressure, flow, timing, relay routing, current, or electrical behavior.",
+      "The result does not establish behavior on other controllers, firmware, machines, transports, or UDP.",
       "The result does not justify standalone air control, encoder or compiler changes, or a broad controller-profile conclusion."
     ]
   },
@@ -64,7 +67,7 @@
         "line_length_mm": 20.0
       }
     },
-    "air_on_unsent": {
+    "air_on_confirmed": {
       "file": "boss-ls2040-proven-air-assist-on-15pct-100mms-x100-y75-offline-v1.rd",
       "sha256": "231e88b14ee36fb66d7ec1f28e5177df19a5309353bf4f54709f410ee9d23795",
       "size_bytes": 580,
@@ -116,10 +119,24 @@
     }
   },
   "air_on_motion_transmission": {
+    "explicit_operator_approval": true,
     "artifact_sha256": "231e88b14ee36fb66d7ec1f28e5177df19a5309353bf4f54709f410ee9d23795",
-    "transmitted": false,
-    "host_log": null,
-    "operator_observation": null
+    "transmitted": true,
+    "driver": "stock Rayforge RuidaSerialDriver",
+    "host_log": {
+      "scope": "host-side driver transfer summary",
+      "packets": 1,
+      "payload_bytes": 580,
+      "retries": 0,
+      "controller_acknowledgement": false,
+      "execution_acknowledgement": false
+    },
+    "operator_observation": {
+      "reported_verbatim": "Air assist is confirmed, I felt the solenoid turn on then off",
+      "instrumented_metrology": false,
+      "observation_mode": "operator tactile observation",
+      "interpretation": "scoped full-layer job-context pass"
+    }
   },
   "standalone_sequence": {
     "explicit_operator_approval": true,
@@ -190,24 +207,30 @@
     ],
     "motion_mark_laser_enable_power_dwell_and_pulse_commands": 0
   },
-  "operator_observation": {
+  "standalone_operator_observation": {
     "reported_verbatim": "No motion or emission.\n\nNo change, no relay clicks, nothing. But lightburn also seems to have failed on this. I could have bad hardware. I would expect to hear a relay or solenoid click",
     "instrumented_metrology": false,
     "reported_lightburn_comparison_artifact_available": false
   },
   "result": {
-    "status": "scoped-standalone-air-control-negative-observation",
-    "physical_response": "not-operator-observed",
-    "motion": "not-operator-observed",
-    "laser_emission": "not-operator-observed",
-    "relay_or_solenoid_click": "not-operator-observed",
-    "controller_controlled_air_on_this_setup": "unavailable-or-inconclusive",
-    "standalone_ca01_air_semantics": "not-validated",
-    "full_job_air_on_semantics": "not-tested",
+    "status": "scoped-full-layer-air-assist-pass-with-standalone-negative-observation",
+    "full_layer_air_assist": "operator-observed-pass-for-exact-artifact",
+    "standalone_physical_response": "not-operator-observed",
+    "standalone_motion": "not-operator-observed",
+    "standalone_laser_emission": "not-operator-observed",
+    "standalone_relay_or_solenoid_click": "not-operator-observed",
+    "controller_controlled_air_on_this_setup": "scoped-full-layer-job-observed-pass",
+    "standalone_ca01_air_semantics": "no-response-inconclusive-not-supported",
+    "full_job_air_on_semantics": "operator-observed-pass-for-exact-artifact",
     "air_off_motion_control": "inconclusive",
-    "air_on_motion_artifact": "not-transmitted",
-    "machine_side_fault": "operator-suggested-inference-only",
-    "causality": "not-established",
+    "air_on_motion_artifact": "operator-confirmed-solenoid-on-then-off",
+    "air_assist_timing_metrology": "not-performed",
+    "pressure_or_flow_metrology": "not-performed",
+    "relay_routing_current_or_electrical_validation": "not-performed",
+    "other_controllers_or_firmware": "not-tested",
+    "udp_transport": "not-tested",
+    "standalone_machine_side_fault": "operator-suggested-inference-only",
+    "standalone_no_response_causality": "not-established",
     "encoder_or_compiler_change": "none",
     "profile_promotion": "none",
     "broad_profile_conclusion": "not-established"
