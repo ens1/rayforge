@@ -1,0 +1,250 @@
+{
+  "schema": "ruida-re.hardware-unidirectional-raster-observation.v1",
+  "identifier": "boss-ls2040-usb-serial-rayforge-unidirectional-raster-v1",
+  "observed_on": "2026-08-11",
+  "generating_revisions": {
+    "rayforge": "cffd368d8e59f4a4bf8d43339873e8ace1445b13",
+    "raygeo": "e21f48c5eb54ebb41b0318b84b62a778005c1f37",
+    "ruida_re": "8c483cd17793d84a1cd83d80dc1d0760e6582cc8"
+  },
+  "scope": {
+    "description": "One supervised execution of an exact production-path Rayforge cardinal-raster coupon produced the operator-reported expected horizontal- and vertical-unidirectional patterns, no visible return burns, and unchanged controller Z readout.",
+    "limitations": [
+      "The host transfer summary proves one packet with zero retries, not controller receipt or execution completion.",
+      "The mark appearance and controller display were observed without dimensional, optical-power, electrical, timing, or motion sensor instrumentation.",
+      "The exact controller bounds, mark lengths, gap lengths, line spacing, modes, and signed marking directions are decoded serialization facts, not operator-measured physical dimensions or motion.",
+      "No visible burns on the returns do not establish zero optical output during travel.",
+      "The operator-reported unchanged Z display and absence of serialized Z commands are not calibrated Z-motion metrology.",
+      "The artifact contains constant power and no C7 or C2 immediate modulation, so it provides no variable-power or grayscale raster evidence.",
+      "The result is scoped to this exact horizontal- and vertical-unidirectional coupon, placement, machine, material, settings, and transfer and does not establish other powers, speeds, angles, layers, controllers, transports, or broad profile compatibility."
+    ]
+  },
+  "environment": {
+    "host_platform": "macOS",
+    "machine": "Boss LS2040",
+    "configured_controller_profile": "Ruida 644XS",
+    "transport": {
+      "kind": "USB serial",
+      "baud": 115200,
+      "controller_acknowledgement_available": false,
+      "execution_acknowledgement_available": false
+    },
+    "material": {
+      "description": "cardboard with a fresh region selected for this coupon",
+      "dimensions_mm": null,
+      "dimensions_reconfirmed_for_this_run": false,
+      "reported_origin": {
+        "corner": "top_right",
+        "x_mm": 0.0,
+        "y_mm": 0.0
+      }
+    },
+    "physical_source_inhibited": false
+  },
+  "generation": {
+    "profile": "proven",
+    "setting_path": [
+      "EngraveStep.create",
+      "UI-model scan_strategy property set to unidirectional",
+      "EngraveStep.to_dict",
+      "JSON serialization roundtrip",
+      "EngraveStep.from_dict",
+      "IntentBuilder",
+      "Raygeo raster assembler and machine transform",
+      "RuidaOpsAdapter proven profile",
+      "RuidaEncoder and ruida-re compiler"
+    ],
+    "serialized_scan_strategy_by_layer": [
+      "unidirectional",
+      "unidirectional"
+    ],
+    "serialized_step_sha256": [
+      "94433d6d9d6a00b7f28b420ad9052c474bf2ee0158132ee7dd2bcb8558b75a5b",
+      "0789f95e9205a64bb290d1269338b37cc7d1af89d09656a6cffc6f0de87c24b9"
+    ],
+    "deterministic_regeneration_same_sha256": true,
+    "hardware_io_during_generation": false,
+    "transport_during_generation": false
+  },
+  "process": {
+    "profile": "proven",
+    "kind": "raster",
+    "raster_processing": "native",
+    "power_mode": "constant",
+    "speed_mm_s": 100.0,
+    "requested_power_percent": 20.0,
+    "encoded_power_percent": 20.002441555270707,
+    "air_assist_requested": false,
+    "laser_enable_mask_by_layer": [
+      1,
+      1
+    ],
+    "controller_bounds_mm": {
+      "min_x": 8.0,
+      "min_y": 90.0,
+      "max_x": 45.108,
+      "max_y": 106.0
+    },
+    "layers": [
+      {
+        "index": 0,
+        "scan_axis": "horizontal",
+        "raster_strategy": "unidirectional",
+        "layer_mode": 1,
+        "layer_operation": 2,
+        "controller_bounds_mm": {
+          "min_x": 8.0,
+          "min_y": 93.8,
+          "max_x": 24.0,
+          "max_y": 97.8
+        },
+        "expected_visible_pattern": "three broken horizontal rows with two marks per row",
+        "row_mark_direction": -1,
+        "mark_lengths_per_row_mm": [
+          6.0,
+          5.0
+        ],
+        "gap_length_per_row_mm": 5.0,
+        "row_spacing_mm": 2.0,
+        "return_motion": "dark absolute travel to the row start at the next Y coordinate"
+      },
+      {
+        "index": 1,
+        "scan_axis": "vertical",
+        "raster_strategy": "unidirectional",
+        "layer_mode": 3,
+        "layer_operation": 4,
+        "controller_bounds_mm": {
+          "min_x": 41.108,
+          "min_y": 90.0,
+          "max_x": 45.108,
+          "max_y": 106.0
+        },
+        "expected_visible_pattern": "three broken vertical columns with two marks per column",
+        "column_mark_direction": 1,
+        "mark_lengths_per_column_mm": [
+          5.5,
+          5.4
+        ],
+        "gap_length_per_column_mm": 5.1,
+        "column_spacing_mm": 2.0,
+        "return_motion": "dark absolute travel to the column start at the next X coordinate"
+      }
+    ],
+    "wire_motion": {
+      "move_absolute_records": 6,
+      "move_horizontal_records": 3,
+      "move_vertical_records": 3,
+      "cut_horizontal_records": 12,
+      "cut_vertical_records": 12,
+      "cut_horizontal_opcode": "aa",
+      "cut_vertical_opcode": "ab",
+      "horizontal_signed_chunk_lengths_mm": [
+        -4.0,
+        -2.0,
+        -4.0,
+        -1.0,
+        -4.0,
+        -2.0,
+        -4.0,
+        -1.0,
+        -4.0,
+        -2.0,
+        -4.0,
+        -1.0
+      ],
+      "vertical_signed_chunk_lengths_mm": [
+        4.0,
+        1.5,
+        4.0,
+        1.4,
+        4.0,
+        1.5,
+        4.0,
+        1.4,
+        4.0,
+        1.5,
+        4.0,
+        1.4
+      ],
+      "maximum_absolute_mark_chunk_length_mm": 4.0,
+      "forbidden_records_absent": [
+        "cut_absolute",
+        "cut_relative",
+        "immediate_power_1",
+        "immediate_power_2",
+        "immediate_power_3",
+        "additional_delay",
+        "pulse",
+        "z_offset_delta",
+        "layer_frequency",
+        "layer_fiber_pulse_width"
+      ],
+      "forbidden_opcodes_absent": [
+        "a8",
+        "a9",
+        "c7",
+        "c2",
+        "c610",
+        "c611",
+        "8003"
+      ]
+    }
+  },
+  "artifact": {
+    "file": "boss-ls2040-proven-unidirectional-raster-matrix-20pct-100mms-x8-y90-offline-v1.rd",
+    "sha256": "255edaf9f35658a53d7a18988e9429ca0a1dfb733a6d7e4909b3edd7215cf1b0",
+    "size_bytes": 769,
+    "checksum": 41166,
+    "records": 128,
+    "known_records": 128,
+    "opaque_records": 0,
+    "issues": [],
+    "exact_preserve_roundtrip": true,
+    "exact_recompute_roundtrip": true
+  },
+  "transmission": {
+    "explicit_operator_approval": true,
+    "artifact_sha256": "255edaf9f35658a53d7a18988e9429ca0a1dfb733a6d7e4909b3edd7215cf1b0",
+    "host_log": {
+      "scope": "host-side stock-driver transfer summary",
+      "packets": 1,
+      "payload_bytes": 769,
+      "retries": 0,
+      "controller_acknowledgement": false,
+      "execution_acknowledgement": false
+    }
+  },
+  "operator_observation": {
+    "prompt_context": "The operator was asked to report the count and orientation of visible marks, any burned return moves, whether controller Z remained unchanged, and any unexpected behavior.",
+    "reported_verbatim": "I see 12 lines, 2x3 vertical and 2x3 horizontal, no burnt return moves, Z remained. All looks as expected",
+    "interpreted_visible_pattern": {
+      "horizontal": "three rows with two visible marks each",
+      "vertical": "three columns with two visible marks each",
+      "total_visible_marks": 12
+    },
+    "prior_reported_controller_z_readout_mm": 18.2,
+    "controller_z_reported_unchanged": true,
+    "instrumented_metrology": false
+  },
+  "result": {
+    "status": "scoped-production-path-cardinal-unidirectional-raster-pass",
+    "horizontal_unidirectional_raster": {
+      "status": "operator-observed-pass",
+      "scope": "the expected three-row, two-mark-per-row appearance of layer 0 in this exact artifact"
+    },
+    "vertical_unidirectional_raster": {
+      "status": "operator-observed-pass",
+      "scope": "the expected three-column, two-mark-per-column appearance of layer 1 in this exact artifact"
+    },
+    "return_travel_burns": "not-operator-observed",
+    "controller_z_readout": "operator-reported-unchanged",
+    "serialized_z_motion": "absent",
+    "dimensional_metrology": "not-performed",
+    "power_metrology": "not-performed",
+    "directional_motion_metrology": "not-performed",
+    "return_zero_optical_output": "not-established",
+    "profile_promotion": "none",
+    "broad_profile_conclusion": "not-established"
+  }
+}
