@@ -6,6 +6,11 @@ from typing import TYPE_CHECKING, Optional
 from pypdf import PdfReader
 from pypdf.errors import PdfReadError
 
+try:
+    import pymupdf
+except ImportError:
+    import fitz as pymupdf
+
 from ..base_renderer import RasterRenderer, RenderSpecification
 
 with warnings.catch_warnings():
@@ -123,13 +128,15 @@ class PdfRenderer(RasterRenderer):
             )
 
         try:
-            probe = pyvips.Image.pdfload_buffer(data, dpi=72)
-            w, h = float(probe.width), float(probe.height)
-            if w > 0 and h > 0:
-                return w, h
-        except pyvips.Error as e:
+            with pymupdf.open(stream=data, filetype="pdf") as document:
+                if document.page_count > 0:
+                    page = document[0]
+                    w, h = float(page.rect.width), float(page.rect.height)
+                    if w > 0 and h > 0:
+                        return w, h
+        except (pymupdf.FileDataError, ValueError, RuntimeError) as e:
             logger.warning(
-                "Failed to read PDF page dimensions via pyvips: %s", e
+                "Failed to read PDF page dimensions via PyMuPDF: %s", e
             )
 
         return None
@@ -162,14 +169,32 @@ class PdfRenderer(RasterRenderer):
         else:
             dpi = 300.0
 
+        scale = dpi / 72.0
         try:
-            image = pyvips.Image.pdfload_buffer(data, dpi=dpi)
-            if not isinstance(image, pyvips.Image) or image.width == 0:
-                return None
-            return image
-        except pyvips.Error:
+            with pymupdf.open(stream=data, filetype="pdf") as document:
+                if document.page_count == 0:
+                    return None
+                pixmap = document[0].get_pixmap(
+                    matrix=pymupdf.Matrix(scale, scale),
+                    colorspace=pymupdf.csRGB,
+                    alpha=False,
+                )
+                image = pyvips.Image.new_from_memory(
+                    pixmap.samples,
+                    pixmap.width,
+                    pixmap.height,
+                    pixmap.n,
+                    "uchar",
+                )
+                return image.bandjoin(255).copy_memory()
+        except (
+            pymupdf.FileDataError,
+            pyvips.Error,
+            ValueError,
+            RuntimeError,
+        ):
             logger.warning(
-                "Failed to render PDF data to vips image.", exc_info=True
+                "Failed to render PDF data with PyMuPDF.", exc_info=True
             )
             return None
 

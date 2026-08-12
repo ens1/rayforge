@@ -1,7 +1,7 @@
 import io
 from pathlib import Path
 from typing import cast
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import cairo
 import pytest
@@ -191,6 +191,21 @@ class TestPdfImporter:
 
 
 class TestPdfRenderer:
+    def test_render_base_image_does_not_use_vips_pdf_plugin(
+        self, basic_pdf_data: bytes
+    ):
+        with patch(
+            "rayforge.image.pdf.renderer.pyvips.Image.pdfload_buffer",
+            create=True,
+            side_effect=AssertionError("libvips PDF plugin was used"),
+        ):
+            image = PDF_RENDERER.render_base_image(
+                basic_pdf_data, width=200, height=100
+            )
+
+        assert image is not None
+        assert (image.width, image.height, image.bands) == (200, 100, 4)
+
     def test_get_natural_size(self, basic_workpiece: WorkPiece):
         """Test natural size calculation on the workpiece."""
         size = basic_workpiece.natural_size

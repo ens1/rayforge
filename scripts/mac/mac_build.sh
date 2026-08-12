@@ -319,12 +319,14 @@ export DYLD_FALLBACK_LIBRARY_PATH="$APP_DIR/Frameworks"
 export SSL_CERT_FILE="$APP_DIR/Resources/cert.pem"
 export GI_TYPELIB_PATH="$APP_DIR/Resources/gi_typelibs"
 export GIO_EXTRA_MODULES="$APP_DIR/Frameworks/gio_modules"
+export VIPSHOME="$APP_DIR/Resources/vips"
 exec "$APP_DIR/MacOS/Rayforge.bin" "$@"
 SH
         chmod +x "$BIN_DIR/Rayforge"
         install_name_tool -add_rpath @executable_path/../Frameworks \
             "$BIN_DIR/Rayforge.bin" 2>/dev/null || true
     fi
+    mkdir -p "$RES_DIR/vips/lib"
 
     BREW_PREFIX=""
     if command -v brew >/dev/null 2>&1; then
