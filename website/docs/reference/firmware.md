@@ -583,6 +583,25 @@ result does not prove zero optical output in the gaps, exercise unidirectional
 or variable-power raster, validate other settings, or promote broader
 compatibility.
 
+##### Native unidirectional raster observation
+
+One exact 769-byte production-path coupon selected unidirectional scanning
+through the serialized `EngraveStep` setting for horizontal and vertical
+native-raster layers. It used requested 20% power and 100 mm/s. The horizontal
+layer encoded mode/operation `1`/`2` with one signed direction of `AA` marks;
+the vertical layer encoded `3`/`4` with one signed direction of `AB` marks.
+Returns used travel motion, marked chunks were no longer than 4 mm, and the
+artifact contained no Z commands.
+
+The host reported one packet and zero retries without controller or execution
+acknowledgement. The operator reported, "I see 12 lines, 2x3 vertical and 2x3
+horizontal, no burnt return moves, Z remained. All looks as expected". The
+exact artifact and report are retained in the
+[`unidirectional-raster` evidence manifest](../../../tests/machine/driver/ruida/fixtures/hardware/boss-ls2040-usb-serial-rayforge-unidirectional-raster-v1/manifest-v1.json).
+This is scoped visual and controller-display evidence, not directional,
+dimensional, power, zero-output, or Z-motion metrology, and it does not promote
+broader compatibility.
+
 #### Evidence-limited research profiles
 
 Each profile must be selected explicitly in the Ruida driver settings. Every

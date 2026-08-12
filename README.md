@@ -149,6 +149,16 @@ binds that observation to the exact artifact. It is not dimensional or power
 metrology, proof of zero optical output in the gaps, or unidirectional-raster
 evidence.
 
+A separate production-path coupon selected unidirectional scanning through the
+serialized `EngraveStep` setting for one horizontal and one vertical native-
+raster layer. At requested 20% power and 100 mm/s, its exact one-packet,
+zero-retry transfer produced the operator report, "I see 12 lines, 2x3 vertical
+and 2x3 horizontal, no burnt return moves, Z remained. All looks as expected".
+The [scoped unidirectional manifest](tests/machine/driver/ruida/fixtures/hardware/boss-ls2040-usb-serial-rayforge-unidirectional-raster-v1/manifest-v1.json)
+binds that observation to the 769-byte artifact. It is visual evidence for
+those exact cardinal patterns and clean-looking returns, not directional,
+dimensional, power, zero-output, or Z metrology.
+
 Normal full-layer job-context air assist has a scoped positive observation on
 the tested Boss LS2040. An exact air-off motion control produced an ambiguous
 operator report of possible airflow masked by motor noise. Its paired 580-byte
