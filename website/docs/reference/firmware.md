@@ -495,8 +495,9 @@ exposed a missing baseline restoration in the executed payloads; exact single-
 and repeated-restore sequences are now operator-observed. Neither result
 promotes the broad profiles. A nominal-0% marking control unexpectedly emitted
 on the tested Boss LS2040, so zero encoded power must not be treated as a
-laser-off control. Dwell, Z, and the other advanced profiles remain
-hardware-unobserved.
+laser-off control. Exact travel-then-100 ms Dwell and paired ±1 mm logical-Z
+controller-readout subsets have scoped observations; their broad profiles and
+the other advanced profiles remain evidence-limited.
 Keep the `proven` profile selected unless you are intentionally evaluating one
 narrow research capability.
 :::
@@ -596,7 +597,7 @@ that scope. The profiles cannot be combined.
 | `stationary-research` | One vector layer containing Dwell events greater than 0 and no longer than 200 ms. Rayforge currently produces these only through manual Ops or frame corner pauses. This is not stationary marking Pulse. Exact 100 ms C6 11 delays after travel are operator-observed in one- and four-delay coupons; mark-adjacent and 200 ms dwell remain unobserved, the broad profile remains research-only, and static 0% marking is rejected. |
 | `rf-research` | One vector layer with RF frequency from 10,000 through 20,000 Hz. |
 | `fiber-research` | One vector layer on a fiber head with pulse width from 0 through 0.2 µs, encoded as 0 through 200 ns. |
-| `z-research` | One native raster layer with a nonzero typed logical layer Z offset no greater than 1 mm in either direction. The compiler emits a balanced relative envelope and still requires all motion endpoints at Z=0. The prepared Z coupons were withheld and remain hardware-unobserved. |
+| `z-research` | One native raster layer with a nonzero typed logical layer Z offset no greater than 1 mm in either direction. The compiler emits a balanced relative envelope and still requires all motion endpoints at Z=0. Exact +1 and -1 mm jobs have scoped controller-readout observations; physical direction, mechanical displacement, interrupted restoration, and broader cases remain unvalidated. |
 | `dynamic-power-research` | One vector layer with Rayforge head-1 intent whose tab transform produces reduced positive marking power. A normal mark after a reduced span requires an explicit baseline-power restoration from a restoration-capable compiler. Exact one-restore and two-restore subsets are operator-observed; the broad profile remains research-only and other combinations are unvalidated. It does not provide general speed-dependent or raster dynamic power. |
 
 The planned-path observations used the same operator-identified Boss LS2040
@@ -605,6 +606,18 @@ movements without visible marks. A direct 15% coupon produced five visible
 lines, and a separate 15% job generated end to end through Rayforge also
 produced five visible lines. Each used one `RasterSection` and ran at
 100 mm/s.
+
+The exact paired logical-Z observations used separate 673-byte positive-power
+native-raster jobs. A logical +1.0 mm job serialized `80 03` deltas of -1.0
+then +1.0 mm, while a logical -1.0 mm job reversed the pair. From a reported
+18.2 mm starting readout, the operator observed 17.2 and 19.2 mm respectively
+during cutting, followed by returns to 18.2 mm. Both host transfers reported
+one packet and zero retries without controller or execution acknowledgement.
+The
+[`logical-z` evidence manifest](../../../tests/machine/driver/ruida/fixtures/hardware/boss-ls2040-usb-serial-rayforge-logical-z-v1/manifest-v1.json)
+limits the result to those controller-readout observations. It is not physical
+direction, displacement, accuracy, backlash, repeatability, or failure-path
+metrology, and the profile remains opt-in and research-only.
 
 The exact Rayforge observation was one layer with five alternating-direction
 marking events. Its Rayforge scan angle was configured to 45 degrees. The job
@@ -719,11 +732,12 @@ update; the controller or power supply could impose a firing floor; and other
 fields, including the minimal through-power records, may contribute. None of
 those explanations is established. The paired dwell artifact differs only by
 four 200 ms C6 11 records and its checksum. It was stopped before transfer,
-published only with an `.rd.quarantined` suffix, and remains do-not-send. The Z
-coupons were also withheld. Consequently that 200 ms marking-path dwell pair
-and nonzero logical Z behavior remain hardware-unobserved. The later scoped
-travel-only 100 ms observation above does not rehabilitate or supersede the
-quarantined pair.
+published only with an `.rd.quarantined` suffix, and remains do-not-send. The
+earlier Z coupons were also withheld. Consequently that 200 ms marking-path
+dwell pair and those earlier Z artifacts remained hardware-unobserved. The
+later scoped travel-only 100 ms and paired logical-Z observations above do not
+rehabilitate or supersede the quarantined dwell pair and do not turn the Z
+readout reports into physical metrology.
 
 Rayforge rejects static zero-power marking motion. Its `ruida-re` compiler also
 rejects every enabled marking-channel minimum and maximum, and raster marking

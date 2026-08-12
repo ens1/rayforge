@@ -1,0 +1,291 @@
+{
+  "schema": "ruida-re.hardware-logical-z-readout-observation.v1",
+  "identifier": "boss-ls2040-usb-serial-rayforge-logical-z-v1",
+  "observed_on": "2026-08-11",
+  "generating_revisions": {
+    "rayforge": "cffd368d8e59f4a4bf8d43339873e8ace1445b13",
+    "raygeo": "e21f48c5eb54ebb41b0318b84b62a778005c1f37",
+    "ruida_re": "ed8938aafefa5a1c20a919b913ada521adf1c83f"
+  },
+  "scope": {
+    "description": "Two separately approved supervised executions of exact Rayforge-generated native-raster jobs produced opposite operator-observed 1.0 mm changes on the machine Z readout during cutting and numerical returns to the reported starting value.",
+    "limitations": [
+      "Each host transfer summary proves one packet with zero retries, not controller receipt or execution completion.",
+      "The operator watched the machine's existing Z readout; no independent position, displacement, direction, timing, or force instrumentation was used.",
+      "The readout values do not establish physical displacement accuracy, backlash, repeatability, or whether the bed, head, or another component moved.",
+      "The logical +1.0 mm case uses a -1.0 mm wire entry delta and the logical -1.0 mm case uses +1.0 mm; the observations do not assign a physical direction to either readout sign.",
+      "The numerical returns to the starting readout apply to these completed jobs and do not validate interruption, failure, emergency-stop, or skipped-restore behavior.",
+      "The positive response did not separately confirm its decoded marking pattern; the negative expected-looking-mark report is qualitative and is not dimensional, optical-power, or dark-gap metrology.",
+      "Other offsets, layer structures, controllers, transports, firmware, and advanced-control combinations remain untested by these artifacts.",
+      "The result does not promote the research profile or broaden encoder or compiler behavior."
+    ]
+  },
+  "environment": {
+    "host_platform": "macOS",
+    "machine": "Boss LS2040",
+    "configured_controller_profile": "Ruida 644XS",
+    "transport": {
+      "kind": "USB serial",
+      "baud": 115200,
+      "controller_acknowledgement_available": false,
+      "execution_acknowledgement_available": false
+    },
+    "material": "cardboard",
+    "physical_source_inhibited": false
+  },
+  "process": {
+    "profile": "z-research",
+    "kind": "raster",
+    "raster_processing": "native",
+    "scan_axis": "horizontal",
+    "scan_strategy": "bidirectional",
+    "speed_mm_s": 100.0,
+    "requested_power_percent": 20.0,
+    "encoded_power_percent": 20.002441555270707,
+    "air_assist_requested": false,
+    "cases": {
+      "positive": {
+        "artifact_key": "positive",
+        "logical_z_offset_mm": 1.0,
+        "wire_z_offset_deltas_mm": [
+          -1.0,
+          1.0
+        ],
+        "wire_z_offset_net_mm": 0.0,
+        "controller_bounds_mm": {
+          "min_x": 20.0,
+          "min_y": 116.052,
+          "max_x": 130.0,
+          "max_y": 128.052
+        }
+      },
+      "negative": {
+        "artifact_key": "negative",
+        "logical_z_offset_mm": -1.0,
+        "wire_z_offset_deltas_mm": [
+          1.0,
+          -1.0
+        ],
+        "wire_z_offset_net_mm": 0.0,
+        "controller_bounds_mm": {
+          "min_x": 30.0,
+          "min_y": 134.052,
+          "max_x": 140.0,
+          "max_y": 146.052
+        }
+      }
+    },
+    "laser_enable_sequence": [
+      3,
+      1,
+      3
+    ],
+    "wrapper_laser_mask_note": "The mask-3 wrapper is captured LightBurn c043/c044 evidence; the marking body uses mask 1.",
+    "decoded_marking_plan": {
+      "rows": 5,
+      "short_segments": 10,
+      "marked_distance_mm": 55.0,
+      "long_gap_length_mm": 99.0,
+      "mark_command": "AA cut_horizontal",
+      "maximum_mark_chunk_mm": 4.0,
+      "signed_mark_chunks_mm": [
+        4.0,
+        1.0,
+        4.0,
+        2.0,
+        -4.0,
+        -2.0,
+        -4.0,
+        -1.0,
+        4.0,
+        1.0,
+        4.0,
+        2.0,
+        -4.0,
+        -2.0,
+        -4.0,
+        -1.0,
+        4.0,
+        1.0,
+        4.0,
+        2.0
+      ]
+    },
+    "z_wrapper_prefix": [
+      {
+        "name": "layer_control",
+        "values": {
+          "operation": 5
+        }
+      },
+      {
+        "name": "axis_speed",
+        "values": {
+          "speed_mm_s": 15.0
+        }
+      },
+      {
+        "name": "layer_control",
+        "values": {
+          "operation": 0
+        }
+      },
+      {
+        "name": "select_layer",
+        "values": {
+          "layer": 0
+        }
+      },
+      {
+        "name": "layer_control",
+        "values": {
+          "operation": 48
+        }
+      },
+      {
+        "name": "layer_control",
+        "values": {
+          "operation": 16
+        }
+      },
+      {
+        "name": "enable_laser_tube_start",
+        "values": {
+          "enabled": 3
+        }
+      }
+    ],
+    "forbidden_records_absent": [
+      "additional_delay",
+      "pulse",
+      "layer_frequency",
+      "layer_fiber_pulse_width",
+      "immediate_power_1",
+      "immediate_power_3",
+      "external_io",
+      "laser_interval",
+      "cut_absolute",
+      "cut_relative",
+      "cut_vertical"
+    ]
+  },
+  "artifacts": {
+    "positive": {
+      "file": "boss-ls2040-native-raster-z-plus-1mm-held-20pct-x20-y115-offline-v5.rd",
+      "sha256": "3a48300c78ac3416044a962dbb7fe78e8e7e1d4380a53986fa0aa2b65f8afa82",
+      "size_bytes": 673,
+      "checksum": 35715,
+      "records": 114,
+      "known_records": 114,
+      "opaque_records": 0,
+      "issues": [],
+      "exact_preserve_roundtrip": true,
+      "exact_recompute_roundtrip": true
+    },
+    "negative": {
+      "file": "boss-ls2040-native-raster-z-minus-1mm-held-20pct-x30-y133-offline-v6.rd",
+      "sha256": "36fcf52b5029777383e31b5e1885c9b6bf3865ca5c621dce1a1bc4a64c540d43",
+      "size_bytes": 673,
+      "checksum": 35518,
+      "records": 114,
+      "known_records": 114,
+      "opaque_records": 0,
+      "issues": [],
+      "exact_preserve_roundtrip": true,
+      "exact_recompute_roundtrip": true
+    }
+  },
+  "transmissions": {
+    "positive": {
+      "explicit_operator_approval": true,
+      "artifact_sha256": "3a48300c78ac3416044a962dbb7fe78e8e7e1d4380a53986fa0aa2b65f8afa82",
+      "driver": "stock Rayforge RuidaSerialDriver",
+      "driver_log_verbatim": "Ruida program transfer completed: 1 packet(s), 0 retry(s). Controller execution is not monitored.",
+      "host_log": {
+        "scope": "host-side driver transfer summary",
+        "packets": 1,
+        "payload_bytes": 673,
+        "retries": 0,
+        "controller_acknowledgement": false,
+        "execution_acknowledgement": false
+      }
+    },
+    "negative": {
+      "explicit_operator_approval": true,
+      "artifact_sha256": "36fcf52b5029777383e31b5e1885c9b6bf3865ca5c621dce1a1bc4a64c540d43",
+      "driver": "stock Rayforge RuidaSerialDriver",
+      "driver_log_verbatim": "Ruida program transfer completed: 1 packet(s), 0 retry(s). Controller execution is not monitored.",
+      "host_log": {
+        "scope": "host-side driver transfer summary",
+        "packets": 1,
+        "payload_bytes": 673,
+        "retries": 0,
+        "controller_acknowledgement": false,
+        "execution_acknowledgement": false
+      }
+    }
+  },
+  "operator_observations": {
+    "positive": {
+      "reported_verbatim": "It went to 17.2mm during cutting, then returned to 18.2",
+      "observation_source": "machine Z readout watched by the operator",
+      "starting_readout_mm": 18.2,
+      "during_cutting_readout_mm": 17.2,
+      "final_readout_mm": 18.2,
+      "calculated_transient_change_mm": -1.0,
+      "calculated_final_difference_mm": 0.0,
+      "instrumented_metrology": false,
+      "independent_position_instrumentation": false,
+      "decoded_marking_pattern_confirmed_by_this_report": false,
+      "collision_or_unexpected_movement_addressed_by_report": false
+    },
+    "negative": {
+      "reported_verbatim": "Yes, went to 19.2 and is now at 18.2. No collision or unexpected movement. Marks look great, as expected",
+      "observation_source": "machine Z readout and qualitative job appearance observed by the operator",
+      "starting_readout_mm": 18.2,
+      "during_cutting_readout_mm": 19.2,
+      "final_readout_mm": 18.2,
+      "calculated_transient_change_mm": 1.0,
+      "calculated_final_difference_mm": 0.0,
+      "instrumented_metrology": false,
+      "independent_position_instrumentation": false,
+      "decoded_marking_pattern_confirmation": "qualitative expected-looking marks",
+      "collision_or_unexpected_movement": "not-operator-observed"
+    }
+  },
+  "result": {
+    "status": "scoped-paired-logical-z-controller-readout-pass",
+    "exact_artifact_hardware_observation": "opposite operator-observed controller-readout changes and numerical restores",
+    "positive_logical_z": {
+      "serialized_offset_mm": 1.0,
+      "wire_entry_delta_mm": -1.0,
+      "wire_restore_delta_mm": 1.0,
+      "operator_reported_readout_change_mm": -1.0,
+      "operator_reported_final_readout_difference_mm": 0.0
+    },
+    "negative_logical_z": {
+      "serialized_offset_mm": -1.0,
+      "wire_entry_delta_mm": 1.0,
+      "wire_restore_delta_mm": -1.0,
+      "operator_reported_readout_change_mm": 1.0,
+      "operator_reported_final_readout_difference_mm": 0.0
+    },
+    "completed_job_readout_restore": "operator-observed-for-both-exact-artifacts",
+    "paired_controller_readout_sign_response": "operator-observed-for-both-exact-artifacts",
+    "physical_axis_direction": "not-established",
+    "bed_or_head_motion": "not-established",
+    "mechanical_displacement_metrology": "not-performed",
+    "absolute_position_accuracy": "not-established",
+    "backlash_or_repeatability": "not-established",
+    "positive_decoded_marking_pattern": "not-confirmed-by-its-report",
+    "negative_marking_appearance": "operator-reported-as-expected",
+    "negative_collision_or_unexpected_movement": "not-operator-observed",
+    "interrupted_or_failed_restore": "not-tested",
+    "other_offsets_or_layer_structures": "not-tested",
+    "other_controllers_or_firmware": "not-tested",
+    "udp_transport": "not-tested",
+    "profile_promotion": "none",
+    "encoder_or_compiler_change": "none",
+    "broad_profile_conclusion": "not-established"
+  }
+}
