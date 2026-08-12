@@ -1,0 +1,212 @@
+{
+  "schema": "ruida-re.hardware-variable-raster-observation.v1",
+  "identifier": "boss-ls2040-usb-serial-rayforge-variable-raster-v1",
+  "observed_on": "2026-08-11",
+  "generating_revisions": {
+    "rayforge": "99b11ec211b1fac7ea0b4e817faee357d3d862d9",
+    "raygeo": "5663bec8c5d47ebb7f3f09d6df0658f5bdac8583",
+    "ruida_re": "2d1995521c0a3bdca8dc7f88d82df6b60baa01cf"
+  },
+  "scope": {
+    "description": "One supervised execution of an exact Rayforge-generated horizontal variable-power native-raster row produced the operator-reported expected appearance.",
+    "limitations": [
+      "The host transfer summary proves one packet with zero retries, not controller receipt or execution completion.",
+      "The observation was visual and had no dimensional, optical-power, electrical, timing, or motion sensor instrumentation.",
+      "The decoded 23 mm and 26 mm marks and 11 mm gap are planned geometry, not operator-measured dimensions.",
+      "The decoded layer range, normalized modulation, and modeled effective outputs are serialization facts, not calibrated physical power measurements.",
+      "The report does not establish that the two positive modulation levels were visually distinguishable or that the travel gap had zero optical output.",
+      "The result is scoped to this exact single horizontal row and does not establish other rows, axes, scan strategies, powers, speeds, layers, controllers, transports, or broad profile compatibility."
+    ]
+  },
+  "environment": {
+    "host_platform": "macOS",
+    "machine": "Boss LS2040",
+    "configured_controller_profile": "Ruida 644XS",
+    "transport": {
+      "kind": "USB serial",
+      "baud": 115200,
+      "controller_acknowledgement_available": false,
+      "execution_acknowledgement_available": false
+    },
+    "material": {
+      "description": "cardboard",
+      "dimensions_mm": [
+        152.4,
+        762.0
+      ],
+      "reported_origin_mm": {
+        "x": 0.0,
+        "y": 0.0
+      }
+    },
+    "physical_source_inhibited": false
+  },
+  "process": {
+    "profile": "proven",
+    "kind": "raster",
+    "raster_processing": "native",
+    "scan_axis": "horizontal",
+    "raster_strategy": "bidirectional",
+    "power_mode": "variable",
+    "speed_mm_s": 100.0,
+    "requested_layer_power_percent": {
+      "minimum": 5.0,
+      "maximum": 15.0
+    },
+    "decoded_layer_power_percent": {
+      "minimum": 4.999084416773485,
+      "maximum": 14.997253250320455
+    },
+    "modulation_semantics": "normalized-position-within-layer-range",
+    "normalized_modulation_percent": [
+      99.01727400354025,
+      24.507111029725934,
+      24.507111029725934,
+      99.01727400354025
+    ],
+    "modeled_effective_output_percent": [
+      14.898998646023253,
+      7.449346753750294,
+      7.449346753750294,
+      14.898998646023253
+    ],
+    "maximum_modeled_effective_output_percent": 14.898998646023253,
+    "source_absolute_sample_u8": 38,
+    "source_absolute_output_percent": 14.901960784313726,
+    "air_assist_requested": false,
+    "laser_enable_mask": 1,
+    "layer_mode": 2,
+    "layer_operation": 1,
+    "controller_bounds_mm": {
+      "min_x": 80.0,
+      "min_y": 24.052,
+      "max_x": 140.0,
+      "max_y": 24.052
+    },
+    "logical_plan": [
+      {
+        "type": "mark_group",
+        "distance_mm": 23.0,
+        "modulated_mark_segments_mm": [
+          22.0,
+          1.0
+        ]
+      },
+      {
+        "type": "travel_to",
+        "distance_mm": 11.0
+      },
+      {
+        "type": "mark_group",
+        "distance_mm": 26.0,
+        "modulated_mark_segments_mm": [
+          1.0,
+          25.0
+        ]
+      }
+    ],
+    "wire_motion": {
+      "move_absolute_records": 2,
+      "cut_horizontal_records": 15,
+      "cut_horizontal_opcode": "aa",
+      "signed_chunk_lengths_mm": [
+        4.0,
+        4.0,
+        4.0,
+        4.0,
+        4.0,
+        2.0,
+        1.0,
+        1.0,
+        4.0,
+        4.0,
+        4.0,
+        4.0,
+        4.0,
+        4.0,
+        1.0
+      ],
+      "maximum_absolute_chunk_length_mm": 4.0,
+      "immediate_power_1_records": 4,
+      "immediate_power_3_records": 4,
+      "paired_modulation_records": true,
+      "forbidden_records_absent": [
+        "cut_absolute",
+        "cut_relative",
+        "cut_vertical",
+        "additional_delay",
+        "timed_pulse",
+        "relative_z_move"
+      ],
+      "forbidden_opcodes_absent": [
+        "a8",
+        "a9",
+        "ab",
+        "c610",
+        "c611",
+        "8003"
+      ]
+    }
+  },
+  "artifact": {
+    "file": "boss-ls2040-variable-raster-5-15pct-v1.rd",
+    "sha256": "1699e0173a30bcbf25e07ff15a3a27534cfbda239c91e67b1ec1559ef9c56c2a",
+    "size_bytes": 555,
+    "checksum": 29720,
+    "records": 92,
+    "known_records": 92,
+    "opaque_records": 0,
+    "issues": [],
+    "exact_preserve_roundtrip": true,
+    "exact_recompute_roundtrip": true
+  },
+  "transmission": {
+    "explicit_operator_approval": true,
+    "artifact_sha256": "1699e0173a30bcbf25e07ff15a3a27534cfbda239c91e67b1ec1559ef9c56c2a",
+    "host_log": {
+      "scope": "host-side driver transfer summary",
+      "packets": 1,
+      "payload_bytes": 555,
+      "retries": 0,
+      "controller_acknowledgement": false,
+      "execution_acknowledgement": false
+    }
+  },
+  "operator_observation": {
+    "prompt_context": "The operator was asked whether two lines with an approximately 11 mm clean gap appeared, whether their approximate lengths matched the decoded 23 mm and 26 mm plan, and whether there were unexpected travel burns, dots, or motion.",
+    "reported_verbatim": "Everything is as expected",
+    "instrumented_metrology": false
+  },
+  "result": {
+    "status": "scoped-variable-native-raster-pass",
+    "variable_power_native_raster": {
+      "status": "operator-observed-pass",
+      "scope": "the expected appearance of the exact single-horizontal-row artifact with its serialized normalized C7/C2 sequence"
+    },
+    "dimensional_metrology": "not-performed",
+    "power_metrology": "not-performed",
+    "gap_zero_optical_output": "not-established",
+    "broader_scan_modes": "not-tested",
+    "profile_promotion": "none",
+    "broad_profile_conclusion": "not-established"
+  },
+  "relationships": {
+    "constant_power_reference": {
+      "identifier": "boss-ls2040-usb-serial-rayforge-native-raster-aa-v1",
+      "artifact_sha256": "d90990c0acfb4fc07fdee57ea50cbf6d7b3201a5ae8bae201ac716371eb49024",
+      "scope_extension": "variable modulation is operator-observed only for the exact new artifact"
+    },
+    "prior_negative_evidence": {
+      "identifier": "boss-ls2040-usb-serial-rayforge-native-raster-failure-v1",
+      "artifact_sha256": "ee1ae328fd431b75f43f0bf61feaf1e08e4ef511fb0c3615d95b0d38aab5e3b4",
+      "disposition": "remains-quarantined-do-not-resend",
+      "superseded": false,
+      "causal_attribution": "not-established",
+      "material_differences": [
+        "all marked motion uses native AA chunks no longer than 4 mm",
+        "a 5% layer minimum replaces the prior lower edge-power range",
+        "the coupon contains one raster row rather than a mixed vector and two-row raster job"
+      ]
+    }
+  }
+}

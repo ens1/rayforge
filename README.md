@@ -130,8 +130,14 @@ adapter inverse-normalizes each positive sample with
 absolute sample directly would apply the layer range a second time. Exact-zero
 samples remain travel motion, and the observed raw-field floor is retained for
 positive modulation. This mapping is supported by controlled LightBurn exports
-and the producer contract; variable-power native raster remains pending a
-scoped hardware coupon.
+and the producer contract. One exact horizontal variable-power native-raster
+row at 100 mm/s and a requested 5%-15% layer range has now completed a
+supervised Boss LS2040 transfer with the operator report, "Everything is as
+expected". It used paired normalized `C7`/`C2` values, only `AA` marking chunks
+no longer than 4 mm, and planned 23 mm and 26 mm marks separated by an 11 mm
+travel gap. This is scoped visual evidence for that artifact, not dimensional
+or power metrology, proof of zero optical output in the gap, or broad raster
+compatibility.
 
 Four one-layer dynamic-vector coupons were also run on that machine at
 100 mm/s. The first, planned as 15%-10%-15%, looked solid and did not establish

@@ -539,6 +539,24 @@ This conservative `proven` profile is selected by default and remains the only
 profile intended for non-research use. It rejects all advanced capabilities
 below.
 
+##### Native variable-power raster observation
+
+One exact Rayforge-generated horizontal native-raster row was transferred once
+to the operator-identified Boss LS2040 over USB serial at 100 mm/s. It used a
+requested 5%-15% layer range, paired normalized `C7`/`C2` modulation, and only
+`AA` marking chunks no longer than 4 mm. The decoded plan contains a 23 mm
+mark, an 11 mm semantic travel gap, and a 26 mm mark. The largest modeled
+effective output is approximately 14.899%. The host reported one packet and
+zero retries, with no controller or execution acknowledgement. The operator
+reported, "Everything is as expected".
+
+The exact artifact and scoped report are retained in the
+[`variable-raster` evidence manifest](../../../tests/machine/driver/ruida/fixtures/hardware/boss-ls2040-usb-serial-rayforge-variable-raster-v1/manifest-v1.json).
+The decoded lengths and output percentages are not measurements. This result
+does not establish calibrated power, distinguish the positive modulation
+levels optically, prove zero output in the gap, validate another row or scan
+mode, or promote broader compatibility.
+
 #### Evidence-limited research profiles
 
 Each profile must be selected explicitly in the Ruida driver settings. Every
