@@ -1,0 +1,215 @@
+{
+  "schema": "rayforge.hardware-travel-dwell-observation.v1",
+  "identifier": "boss-ls2040-usb-serial-rayforge-travel-dwell-v1",
+  "observed_on": "2026-08-11",
+  "generating_revisions": {
+    "rayforge": "d7a5860df144824f45747cc0ee161d3c81cf654a",
+    "ruida_re": "4af8e1cf0be2b4a12c6ffb0fc0d05ecccba4ac0f"
+  },
+  "scope": {
+    "description": "Three staged executions compared an exact no-dwell control with one and four 100 ms C611 delays placed immediately after absolute travel moves on one Boss LS2040.",
+    "limitations": [
+      "The host transfer summaries prove one packet with zero retries, not controller receipt or execution completion.",
+      "The observations were visual operator reports without dimensional, timing, motion, optical-power, or electrical instrumentation.",
+      "The encoded delay value is exactly 100 ms, but the observed pauses were not timed.",
+      "The operator's approximate line lengths and differing orientation labels are not dimensional or orientation metrology.",
+      "The artifacts test delay only after explicit TravelTo motion; they do not test a delay adjacent to marking motion.",
+      "No artifact tests 200 ms dwell, C610 pulse, stationary marking, arbitrary sequences, or profile-wide compatibility."
+    ]
+  },
+  "environment": {
+    "host_platform": "macOS",
+    "machine": "Boss LS2040",
+    "configured_controller_profile": "Ruida 644XS",
+    "transport": {
+      "kind": "USB serial",
+      "baud": 115200,
+      "controller_acknowledgement_available": false,
+      "execution_acknowledgement_available": false
+    },
+    "material": {
+      "description": "cardboard",
+      "dimensions_mm": [
+        152.4,
+        762.0
+      ],
+      "reported_origin_mm": {
+        "x": 0.0,
+        "y": 0.0
+      }
+    },
+    "physical_source_inhibited": false
+  },
+  "process": {
+    "profile": "stationary-research",
+    "kind": "vector",
+    "speed_mm_s": 100.0,
+    "requested_power_percent": 15.0,
+    "encoded_power_percent": 14.997253250320455,
+    "air_assist_requested": false,
+    "laser_enable_mask": 1,
+    "controller_bounds_mm": {
+      "min_x": 110.0,
+      "min_y": 132.0,
+      "max_x": 145.0,
+      "max_y": 147.0
+    },
+    "anchor": {
+      "start_mm": [
+        110.0,
+        132.0
+      ],
+      "end_mm": [
+        115.0,
+        132.0
+      ],
+      "planned_length_mm": 5.0,
+      "marking_commands": 1
+    },
+    "travel_points_mm": [
+      [
+        125.0,
+        132.0
+      ],
+      [
+        145.0,
+        132.0
+      ],
+      [
+        145.0,
+        147.0
+      ],
+      [
+        125.0,
+        147.0
+      ]
+    ],
+    "wire_contract": {
+      "travel_record": "move_absolute",
+      "travel_opcode": "88",
+      "anchor_record": "cut_absolute",
+      "anchor_opcode": "a8",
+      "delay_record": "additional_delay",
+      "delay_opcode": "c611",
+      "delay_time_ms": 100.0,
+      "delay_logical_bytes": "c6110000060d20",
+      "each_delay_immediately_follows_travel": true,
+      "cut_commands_after_anchor": 0,
+      "c610_pulse_records": 0
+    }
+  },
+  "artifacts": {
+    "control": {
+      "file": "boss-ls2040-anchor-travel-control-x110-y132-offline-v4.rd",
+      "sha256": "380b3d9b68334a0ce13c3bb0084c2417342725fc3458e0563ccadd7722e51521",
+      "size_bytes": 536,
+      "checksum": 24829,
+      "records": 74,
+      "known_records": 74,
+      "opaque_records": 0,
+      "issues": [],
+      "delay_count": 0,
+      "delay_after_travel_indices": []
+    },
+    "sentinel": {
+      "file": "boss-ls2040-anchor-travel-1x100ms-x110-y132-offline-v4.rd",
+      "sha256": "72b5b63fb71f5e84ddca955d93e596b1d072ff41ead40694074368449b566c27",
+      "size_bytes": 543,
+      "checksum": 25095,
+      "records": 75,
+      "known_records": 75,
+      "opaque_records": 0,
+      "issues": [],
+      "delay_count": 1,
+      "delay_after_travel_indices": [
+        0
+      ]
+    },
+    "full": {
+      "file": "boss-ls2040-anchor-travel-4x100ms-x110-y132-offline-v4.rd",
+      "sha256": "b826b5bb0c39f0bb6165599b085967805816c7a3c242ce206551b9d513e25d87",
+      "size_bytes": 564,
+      "checksum": 25893,
+      "records": 78,
+      "known_records": 78,
+      "opaque_records": 0,
+      "issues": [],
+      "delay_count": 4,
+      "delay_after_travel_indices": [
+        0,
+        1,
+        2,
+        3
+      ]
+    }
+  },
+  "comparison": {
+    "core_records_identical_after_excluding_delay_and_checksum": true,
+    "control_to_sentinel_difference": "one C611 additional_delay record and the derived checksum",
+    "control_to_full_difference": "four C611 additional_delay records and the derived checksum"
+  },
+  "transmissions": {
+    "control": {
+      "explicit_operator_approval": true,
+      "artifact_sha256": "380b3d9b68334a0ce13c3bb0084c2417342725fc3458e0563ccadd7722e51521",
+      "host_log": {
+        "scope": "host-side driver transfer summary",
+        "packets": 1,
+        "payload_bytes": 536,
+        "retries": 0,
+        "controller_acknowledgement": false,
+        "execution_acknowledgement": false
+      }
+    },
+    "sentinel": {
+      "explicit_operator_approval": true,
+      "artifact_sha256": "72b5b63fb71f5e84ddca955d93e596b1d072ff41ead40694074368449b566c27",
+      "host_log": {
+        "scope": "host-side driver transfer summary",
+        "packets": 1,
+        "payload_bytes": 543,
+        "retries": 0,
+        "controller_acknowledgement": false,
+        "execution_acknowledgement": false
+      }
+    },
+    "full": {
+      "explicit_operator_approval": true,
+      "artifact_sha256": "b826b5bb0c39f0bb6165599b085967805816c7a3c242ce206551b9d513e25d87",
+      "host_log": {
+        "scope": "host-side driver transfer summary",
+        "packets": 1,
+        "payload_bytes": 564,
+        "retries": 0,
+        "controller_acknowledgement": false,
+        "execution_acknowledgement": false
+      }
+    }
+  },
+  "operator_observations": {
+    "control": {
+      "reported_verbatim": "I see one faint line, vertical, about 5mm",
+      "instrumented_metrology": false
+    },
+    "sentinel": {
+      "reported_verbatim": "It looks like it did a rectangle with pauses at the corner? Nothing other than a horizontal line, about 5mm",
+      "instrumented_metrology": false
+    },
+    "full": {
+      "reported_verbatim": "Yes, one faint line, pauses at the corners",
+      "instrumented_metrology": false
+    }
+  },
+  "result": {
+    "status": "scoped-travel-then-c611-pass",
+    "encoded_subset": "one and four exact 100 ms C611 delays immediately after TravelTo",
+    "pause_behavior": "operator-observed",
+    "post_anchor_visible_marking": "operator-reported-absent",
+    "timing_metrology": "not-performed",
+    "dimensional_metrology": "not-performed",
+    "mark_adjacent_dwell": "not-tested",
+    "dwell_200_ms": "not-tested",
+    "stationary_marking_pulse": "not-tested",
+    "broad_profile_conclusion": "not-established"
+  }
+}

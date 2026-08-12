@@ -156,18 +156,23 @@ contribute. Rayforge now rejects static marking motion at zero power, and the
 below the observed raw-field floor of 16. That is a fail-closed generation
 boundary, not proof that low positive power is physically safe. Existing or
 externally supplied `.rd` files receive no retroactive protection. The paired
-C6 11 dwell job and the planned Z coupons were never sent and remain untested
-and quarantined. Research profiles emit a warning and reject requests outside
-their narrow evidence before transfer.
+200 ms C6 11 dwell job and the planned Z coupons were never sent and remain
+untested and quarantined. A later positive-power, travel-only staged test used
+one and four exact 100 ms C6 11 delays after absolute travel moves. The
+operator reported corner pauses and only the intentional faint 5 mm anchor
+mark. This is observation for those exact files, not timing metrology or broad
+dwell validation. Research profiles emit a warning and reject requests
+outside their narrow evidence before transfer.
 
 The opt-in profiles cover constant-power diagonal or cross-hatch planned-path
 raster, selecting either Ruida laser channel 1 or 2 (never both at once),
 vector Dwell from manual Ops or frame corner pauses, 10-20 kHz RF frequency,
 0-0.2 µs (0-200 ns) fiber pulse width, a balanced logical Z offset of up to
 ±1 mm for one native raster layer, and reduced vector power at tabs. Research
-profiles are not composable. Dwell and Z remain offline-only after the unsafe
-zero-power control; rotary, cut-through controls, generic endpoint Z motion,
-stationary marking Pulse, and other unobserved combinations remain unsupported.
+profiles are not composable. The exact travel-then-100 ms dwell subset is
+operator-observed, while mark-adjacent dwell, 200 ms dwell, stationary marking
+Pulse, and Z remain unobserved. Rotary, cut-through controls, generic endpoint
+Z motion, and other unobserved combinations remain unsupported.
 
 Ruida drivers are transfer-only. They do not manage the controller or monitor
 job execution, so a successful transfer is not confirmation that cutting or

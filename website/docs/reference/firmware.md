@@ -550,7 +550,7 @@ that scope. The profiles cannot be combined.
 | :------ | :-------------------- |
 | `planned-path-research` | One planned-path raster layer using constant binary power for diagonal or cross-hatch scans. Variable-power, grayscale, and depth-map diagonal scans remain unsupported. |
 | `dual-laser-research` | One vector layer using either controller channel 1 or channel 2. The inactive channel's stored powers must be entered and explicitly confirmed. Simultaneous channel mask 3 is not supported. |
-| `stationary-research` | One vector layer containing Dwell events greater than 0 and no longer than 200 ms. Rayforge currently produces these only through manual Ops or frame corner pauses. This is not stationary marking Pulse. C6 11 dwell remains hardware-unobserved, and static 0% marking is rejected. |
+| `stationary-research` | One vector layer containing Dwell events greater than 0 and no longer than 200 ms. Rayforge currently produces these only through manual Ops or frame corner pauses. This is not stationary marking Pulse. Exact 100 ms C6 11 delays after travel are operator-observed in one- and four-delay coupons; mark-adjacent and 200 ms dwell remain unobserved, the broad profile remains research-only, and static 0% marking is rejected. |
 | `rf-research` | One vector layer with RF frequency from 10,000 through 20,000 Hz. |
 | `fiber-research` | One vector layer on a fiber head with pulse width from 0 through 0.2 µs, encoded as 0 through 200 ns. |
 | `z-research` | One native raster layer with a nonzero typed logical layer Z offset no greater than 1 mm in either direction. The compiler emits a balanced relative envelope and still requires all motion endpoints at Z=0. The prepared Z coupons were withheld and remain hardware-unobserved. |
@@ -635,6 +635,32 @@ research-only and is not eligible for default promotion. Other powers, speeds,
 geometry, repeated patterns, additional heads, controllers, transports, or
 combinations with another research capability remain unvalidated.
 
+##### Travel-only stationary dwell observation
+
+A staged Rayforge-generated set compared a no-dwell control with one and four
+exact 100 ms `C611` `additional_delay` records on the same Boss LS2040. All
+three files contained one planned 5 mm anchor at 15% requested power and
+100 mm/s, followed only by four absolute travel moves. The sentinel placed one
+delay after the first travel; the full coupon placed a delay after every
+travel. The files contained no `C610` pulse and no marking command after the
+anchor.
+
+Each exact artifact was transferred once after separate operator approval.
+Each host summary reported one packet and zero retries, with no controller or
+execution acknowledgement. For the control, the operator reported, "I see one
+faint line, vertical, about 5mm". For the one-delay sentinel, the report was,
+"It looks like it did a rectangle with pauses at the corner? Nothing other
+than a horizontal line, about 5mm". For the four-delay coupon, the operator
+reported, "Yes, one faint line, pauses at the corners".
+
+This establishes only operator-observed pause behavior for those exact
+travel-then-100 ms delay artifacts, without visible post-anchor marking in the
+reports. No timing or motion instrumentation measured the pauses, and the
+approximate line descriptions are not dimensional or orientation metrology.
+The result does not validate mark-adjacent dwell, 200 ms dwell, stationary
+marking Pulse, arbitrary sequences, or the broad `stationary-research`
+profile.
+
 ##### Zero-power safety observation
 
 Before a C6 11 dwell test, a paired no-dwell control was generated with zero
@@ -651,8 +677,10 @@ fields, including the minimal through-power records, may contribute. None of
 those explanations is established. The paired dwell artifact differs only by
 four 200 ms C6 11 records and its checksum. It was stopped before transfer,
 published only with an `.rd.quarantined` suffix, and remains do-not-send. The Z
-coupons were also withheld. Consequently C6 11 dwell and nonzero logical Z
-behavior remain hardware-unobserved.
+coupons were also withheld. Consequently that 200 ms marking-path dwell pair
+and nonzero logical Z behavior remain hardware-unobserved. The later scoped
+travel-only 100 ms observation above does not rehabilitate or supersede the
+quarantined pair.
 
 Rayforge rejects static zero-power marking motion. Its `ruida-re` compiler also
 rejects every enabled marking-channel minimum and maximum, and raster marking
