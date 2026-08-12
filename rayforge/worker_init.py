@@ -3,6 +3,7 @@ import logging
 import os
 import sys
 from pathlib import Path
+from typing import Any, cast
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +24,7 @@ def initialize_worker(shared_state=None):
         # macOS PyInstaller bundles require specific environment variables
         # for dynamic linking and GObject Introspection to work correctly
         # in worker subprocesses.
-        frameworks_dir = Path(sys._MEIPASS).parent / "Frameworks"
+        frameworks_dir = Path(cast(Any, sys)._MEIPASS).parent / "Frameworks"
         lib_path = str(frameworks_dir)
         # DYLD_LIBRARY_PATH: Directories for dynamic linker to search
         existing_dyld = os.environ.get("DYLD_LIBRARY_PATH")
@@ -45,7 +46,7 @@ def initialize_worker(shared_state=None):
     elif hasattr(sys, "_MEIPASS") and sys.platform == "win32":
         # Windows PyInstaller bundles need explicit DLL search path
         # for spawned subprocesses to find cairo, rsvg, etc.
-        base_dir = Path(sys._MEIPASS)
+        base_dir = Path(cast(Any, sys)._MEIPASS)
         try:
             os.add_dll_directory(str(base_dir))
         except OSError:

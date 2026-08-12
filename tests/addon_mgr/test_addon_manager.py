@@ -195,6 +195,52 @@ class TestAddonManagerLoading:
         manager.plugin_mgr.register.assert_called_once()
 
     @patch("rayforge.addon_mgr.addon_manager.Addon.load_from_directory")
+    def test_frozen_builtin_addon_does_not_compile_translations(
+        self, mock_load, manager, tmp_path
+    ):
+        addon_dir = tmp_path / "builtin" / "test_pkg"
+        mock_load.return_value = create_mock_addon(
+            name="test_plugin", worker="plugin"
+        )
+
+        with (
+            patch.object(sys, "frozen", True, create=True),
+            patch("rayforge.addon_mgr.addon_manager.importlib.util"),
+            patch.object(
+                manager,
+                "_check_version_compatibility",
+                return_value=UpdateStatus.UP_TO_DATE,
+            ),
+            patch.object(manager, "compile_translations") as mock_compile,
+        ):
+            manager.load_addon(addon_dir)
+
+        mock_compile.assert_not_called()
+
+    @patch("rayforge.addon_mgr.addon_manager.Addon.load_from_directory")
+    def test_frozen_external_addon_compiles_translations(
+        self, mock_load, manager
+    ):
+        addon_dir = manager.install_dir / "test_pkg"
+        mock_load.return_value = create_mock_addon(
+            name="test_plugin", worker="plugin"
+        )
+
+        with (
+            patch.object(sys, "frozen", True, create=True),
+            patch("rayforge.addon_mgr.addon_manager.importlib.util"),
+            patch.object(
+                manager,
+                "_check_version_compatibility",
+                return_value=UpdateStatus.UP_TO_DATE,
+            ),
+            patch.object(manager, "compile_translations") as mock_compile,
+        ):
+            manager.load_addon(addon_dir)
+
+        mock_compile.assert_called_once_with(addon_dir)
+
+    @patch("rayforge.addon_mgr.addon_manager.Addon.load_from_directory")
     def test_load_addon_validation_error(self, mock_load, manager):
         mock_load.side_effect = AddonValidationError("Bad format")
         manager.load_addon(Path("any/path"))

@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from hashlib import sha256
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from ruida_re import KnownCommand, RuidaCodec
 
@@ -77,7 +77,7 @@ def _motion_bounds(
             y = round(y + record.values["dy_mm"], 3)
         else:
             continue
-        points.append((x, y))
+        points.append((cast(float, x), cast(float, y)))
     return {
         "min_x": min(x_value for x_value, _ in points),
         "min_y": min(y_value for _, y_value in points),
@@ -139,7 +139,12 @@ def test_native_cardinal_layers_and_bounds_are_exact() -> None:
     ]
     assert (
         max(
-            abs(record.values.get("dx_mm", record.values.get("dy_mm")))
+            abs(
+                cast(
+                    float,
+                    record.values.get("dx_mm", record.values.get("dy_mm")),
+                )
+            )
             for record in (*horizontal_cuts, *vertical_cuts)
         )
         == wire["maximum_absolute_mark_chunk_length_mm"]

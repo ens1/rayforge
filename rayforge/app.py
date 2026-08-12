@@ -11,7 +11,7 @@ import traceback
 import warnings
 from gettext import gettext as _
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 # Parse --config early before any rayforge imports, as they may
 # import config.py which computes CONFIG_DIR at module load time
@@ -42,7 +42,7 @@ warnings.filterwarnings(
 if hasattr(sys, "_MEIPASS"):
     # In a PyInstaller bundle, the project root is in a temporary
     # directory stored in sys._MEIPASS.
-    base_dir = Path(sys._MEIPASS)  # type: ignore
+    base_dir = Path(cast(Any, sys)._MEIPASS)
 else:
     base_dir = Path(__file__).parent.parent
 
@@ -94,7 +94,7 @@ if hasattr(sys, "_MEIPASS"):
         # macOS PyInstaller bundles use a Frameworks directory structure
         # that requires specific environment variables for dynamic linking
         # and GObject Introspection to work correctly.
-        frameworks_dir = Path(sys._MEIPASS).parent / "Frameworks"
+        frameworks_dir = Path(cast(Any, sys)._MEIPASS).parent / "Frameworks"
         bundled_typelibs = frameworks_dir / "gi_typelibs"
         bundled_gio_modules = frameworks_dir / "gio_modules"
         lib_path = str(frameworks_dir)

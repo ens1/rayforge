@@ -112,6 +112,10 @@ if [ ! -d "$VENV_PATH" ]; then
 fi
 
 VENV_PY="$VENV_PATH/bin/python"
+BUILD_USER_HOME=$("$VENV_PY" -c \
+    'from pathlib import Path; print(Path.home())')
+RUST_PATH_REMAP="--remap-path-prefix=$BUILD_USER_HOME=/build/home"
+export RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }$RUST_PATH_REMAP"
 "$VENV_PY" -m pip install --upgrade pip
 "$VENV_PY" -m pip install --upgrade build pyinstaller
 TMP_REQUIREMENTS=$(mktemp)
@@ -153,7 +157,7 @@ if [ "$(uname -s)" = "Darwin" ]; then
         "opencv-python==4.10.0.84"
 fi
 
-"$VENV_PY" -m pip install -r "$TMP_REQUIREMENTS"
+"$VENV_PY" -m pip install --no-cache-dir -r "$TMP_REQUIREMENTS"
 if [ "$(uname -s)" = "Darwin" ]; then
     "$VENV_PY" -m pip install --upgrade --force-reinstall \
         --only-binary=:all: \
@@ -187,6 +191,18 @@ bash scripts/update_translations.sh --compile-only
 
 VERSION=${VERSION_OVERRIDE:-$(git describe --tags --always 2>/dev/null || \
     echo "v0.0.0-local")}
+if [[ "$VERSION" =~ ([0-9]+)\.([0-9]+)\.([0-9]+) ]]; then
+    BUNDLE_SHORT_VERSION=$(printf "%s.%s.%s" \
+        "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" "${BASH_REMATCH[3]}")
+else
+    echo "Version must contain a numeric major.minor.patch: $VERSION" >&2
+    exit 1
+fi
+if [[ "$VERSION" =~ preview([0-9]+) ]]; then
+    BUNDLE_BUILD_VERSION="${BASH_REMATCH[1]}"
+else
+    BUNDLE_BUILD_VERSION="1"
+fi
 echo "$VERSION" > rayforge/version.txt
 
 if (( DO_BUILD == 1 )); then
@@ -300,6 +316,7 @@ PY
 APP_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 export DYLD_LIBRARY_PATH="$APP_DIR/Frameworks"
 export DYLD_FALLBACK_LIBRARY_PATH="$APP_DIR/Frameworks"
+export SSL_CERT_FILE="$APP_DIR/Resources/cert.pem"
 export GI_TYPELIB_PATH="$APP_DIR/Resources/gi_typelibs"
 export GIO_EXTRA_MODULES="$APP_DIR/Frameworks/gio_modules"
 exec "$APP_DIR/MacOS/Rayforge.bin" "$@"
@@ -319,6 +336,49 @@ SH
         else
             BREW_PREFIX="/usr/local"
         fi
+    fi
+
+    SSL_MODULE=$("$VENV_PY" -c 'import _ssl; print(_ssl.__file__)')
+    for libname in libcrypto.3.dylib libssl.3.dylib; do
+        libsource=$(otool -L "$SSL_MODULE" | awk -v lib="$libname" '
+            NR > 1 {
+                count = split($1, parts, "/")
+                if (parts[count] == lib) {
+                    print $1
+                    exit
+                }
+            }
+        ')
+        if [ -z "$libsource" ] || [ ! -f "$libsource" ]; then
+            echo "Unable to locate $libname used by $SSL_MODULE" >&2
+            exit 1
+        fi
+        rm -f "$FW_DIR/$libname"
+        cp "$libsource" "$FW_DIR/$libname"
+        chmod u+w "$FW_DIR/$libname"
+        install_name_tool -id "@rpath/$libname" "$FW_DIR/$libname"
+    done
+
+    SSL_CERT_SOURCE=$("$VENV_PY" -c '
+import ssl
+
+print(ssl.get_default_verify_paths().cafile or "")
+')
+    if [ -z "$SSL_CERT_SOURCE" ] || [ ! -f "$SSL_CERT_SOURCE" ]; then
+        echo "Unable to locate the Python TLS certificate bundle" >&2
+        exit 1
+    fi
+    cp "$SSL_CERT_SOURCE" "$RES_DIR/cert.pem"
+
+    CV2_DYLIB_DIR="$FW_DIR/cv2/__dot__dylibs"
+    if [ ! -d "$CV2_DYLIB_DIR" ]; then
+        CV2_DYLIB_DIR="$FW_DIR/cv2/.dylibs"
+    fi
+    if [ -d "$CV2_DYLIB_DIR" ]; then
+        for libname in libcrypto.3.dylib libssl.3.dylib; do
+            rm -f "$CV2_DYLIB_DIR/$libname"
+            ln -s "../../$libname" "$CV2_DYLIB_DIR/$libname"
+        done
     fi
 
     # Ship critical libs from Homebrew and fix their IDs.
@@ -566,7 +626,79 @@ SH
 
     # Note: GTK4 typelibs are automatically bundled by PyInstaller to Resources/gi_typelibs
 
-    # Re-sign after install_name_tool and dylib rewrites to keep
+    BUNDLE_MIN_VERSION=$("$VENV_PY" - "$APP_ROOT" \
+        "$MACOS_MIN_VERSION" <<'PY'
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+
+def as_version(value):
+    parts = [int(part) for part in value.split(".")]
+    return tuple((parts + [0, 0, 0])[:3])
+
+
+minimum = as_version(sys.argv[2])
+for path in Path(sys.argv[1]).rglob("*"):
+    if not path.is_file() or path.is_symlink():
+        continue
+    kind = subprocess.run(
+        ["file", "-b", str(path)],
+        capture_output=True,
+        check=True,
+        errors="replace",
+        text=True,
+    ).stdout
+    if "Mach-O" not in kind:
+        continue
+    commands = subprocess.run(
+        ["otool", "-l", str(path)],
+        capture_output=True,
+        check=True,
+        errors="replace",
+        text=True,
+    ).stdout
+    matches = re.findall(
+        r"^\s+minos\s+(\d+(?:\.\d+){1,2})", commands, re.M
+    )
+    matches.extend(
+        re.findall(
+            r"cmd LC_VERSION_MIN_MACOSX.*?^\s+version\s+"
+            r"(\d+(?:\.\d+){1,2})",
+            commands,
+            re.M | re.S,
+        )
+    )
+    for value in matches:
+        minimum = max(minimum, as_version(value))
+
+components = 3 if minimum[2] else 2
+print(".".join(str(part) for part in minimum[:components]))
+PY
+    )
+
+    "$VENV_PY" - "$APP_ROOT/Info.plist" "$BUNDLE_SHORT_VERSION" \
+        "$BUNDLE_BUILD_VERSION" "$BUNDLE_MIN_VERSION" <<'PY'
+import plistlib
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+with path.open("rb") as source:
+    info = plistlib.load(source)
+info["CFBundleExecutable"] = "Rayforge"
+info["CFBundleShortVersionString"] = sys.argv[2]
+info["CFBundleVersion"] = sys.argv[3]
+info["LSMinimumSystemVersion"] = sys.argv[4]
+info["NSCameraUsageDescription"] = (
+    "Rayforge uses the camera for work-area alignment and calibration."
+)
+with path.open("wb") as destination:
+    plistlib.dump(info, destination)
+PY
+
+    # Re-sign after install_name_tool, dylib, and plist rewrites to keep
     # macOS code-signing validation valid on Apple Silicon.
     if [ "$(uname -m)" = "arm64" ]; then
         APP_BUNDLE="$(pwd)/dist/Rayforge.app"
@@ -581,9 +713,7 @@ SH
             sleep 1
             codesign --force --deep --sign - "$APP_BUNDLE"
         fi
-        if ! codesign --verify --deep --strict --verbose=2 "$APP_BUNDLE"; then
-            echo "Warning: codesign verification failed for $APP_BUNDLE" >&2
-        fi
+        codesign --verify --deep --strict --verbose=2 "$APP_BUNDLE"
     fi
 
     # TODO: Bundle vips modules and gdk-pixbuf loaders when vips is installed with SVG support
@@ -593,10 +723,6 @@ SH
     # if [ -d "/usr/local/lib/gdk-pixbuf-2.0" ]; then
     #     cp -r "/usr/local/lib/gdk-pixbuf-2.0" "$FW_DIR/" || true
     # fi
-
-    # Make sure the plist still points to the wrapper.
-    /usr/libexec/PlistBuddy -c "Set :CFBundleExecutable Rayforge" \
-        "$APP_ROOT/Info.plist" 2>/dev/null || true
 
     echo "Cleaning dist/*.whl and dist/*.gz after app bundle..."
     rm -f dist/*.whl dist/*.gz dist/*.tar.gz

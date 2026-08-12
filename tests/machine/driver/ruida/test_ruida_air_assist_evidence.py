@@ -245,7 +245,8 @@ def test_air_observations_and_claims_remain_scoped() -> None:
         "hardware. I would expect to hear a relay or solenoid click"
     )
     assert result["status"] == (
-        "scoped-full-layer-air-assist-pass-with-standalone-negative-observation"
+        "scoped-full-layer-air-assist-pass-with-standalone-"
+        "negative-observation"
     )
     assert result["controller_controlled_air_on_this_setup"] == (
         "scoped-full-layer-job-observed-pass"

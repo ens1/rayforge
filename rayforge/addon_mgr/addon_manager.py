@@ -671,7 +671,8 @@ class AddonManager:
                 self.license_required_addons[addon_name] = addon
                 return
 
-            self.compile_translations(addon_path)
+            if not (is_builtin and getattr(sys, "frozen", False)):
+                self.compile_translations(addon_path)
 
             locale_dir = addon_path / "locale"
             if not locale_dir.is_dir():
