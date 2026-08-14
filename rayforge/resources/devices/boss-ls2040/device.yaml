@@ -10,7 +10,7 @@ machine:
     port: ''
     baudrate: 115200
     job_profile: proven
-  auto_connect: false
+  auto_connect: true
   gcode_precision: 3
   supports_arcs: false
   supports_curves: false

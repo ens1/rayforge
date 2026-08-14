@@ -29,7 +29,7 @@ def _assert_boss_machine(machine):
         "baudrate": 115200,
         "job_profile": "proven",
     }
-    assert machine.auto_connect is False
+    assert machine.auto_connect is True
     assert machine.axis_extents == pytest.approx(
         (991.1080322265625, 599.947998046875)
     )
@@ -95,7 +95,7 @@ async def test_boss_profile_discovery_roundtrip_is_fail_closed(
     connect.assert_not_awaited()
 
     exported = export_machine_to_dir(machine, tmp_path / "exported")
-    assert exported.machine_config.auto_connect is False
+    assert exported.machine_config.auto_connect is True
     assert exported.machine_config.driver_args == machine.driver_args
 
     restored = exported.create_machine(lite_context)
