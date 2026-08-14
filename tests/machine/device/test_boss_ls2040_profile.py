@@ -21,11 +21,11 @@ async def _wait_for_tasks(task_mgr: TaskManager):
     pytest.fail("Task manager did not become idle in time.")
 
 
-def _assert_boss_machine(machine):
+def _assert_boss_machine(machine, port=""):
     assert machine.name == "Boss LS2040"
     assert machine.driver_name == "RuidaSerialDriver"
     assert machine.driver_args == {
-        "port": "",
+        "port": port,
         "baudrate": 115200,
         "job_profile": "proven",
     }
@@ -103,3 +103,36 @@ async def test_boss_profile_discovery_roundtrip_is_fail_closed(
     _assert_boss_machine(restored)
     assert restored.driver.state.error is not None
     connect.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_boss_profile_connects_when_serial_port_is_configured(
+    lite_context, task_mgr, monkeypatch
+):
+    connect = AsyncMock()
+    monkeypatch.setattr(
+        RuidaSerialDriver,
+        "_connect_implementation",
+        connect,
+    )
+    manager = DeviceProfileManager([BUILTIN_DEVICES_DIR])
+    manager.discover()
+    profile = manager.get("Boss LS2040")
+
+    assert profile is not None
+    machine = profile.create_machine(lite_context)
+    await _wait_for_tasks(task_mgr)
+    connect.assert_not_awaited()
+
+    machine.set_driver(
+        RuidaSerialDriver,
+        {
+            "port": "/dev/cu.test-ruida",
+            "baudrate": 115200,
+            "job_profile": "proven",
+        },
+    )
+    await _wait_for_tasks(task_mgr)
+
+    _assert_boss_machine(machine, port="/dev/cu.test-ruida")
+    connect.assert_awaited_once_with()

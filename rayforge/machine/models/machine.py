@@ -538,10 +538,8 @@ class Machine:
         self.driver_name = new_driver_name
         self.driver_args = new_args
         self.changed.send(self)
-        task_mgr.add_coroutine(
-            self.controller.rebuild_driver,
-            key=(self.id, "rebuild-driver"),
-        )
+        if not self.has_controller:
+            _ = self.controller
 
     def set_driver_args(self, args=None):
         new_args = args or {}
@@ -550,10 +548,8 @@ class Machine:
 
         self.driver_args = new_args
         self.changed.send(self)
-        task_mgr.add_coroutine(
-            self.controller.rebuild_driver,
-            key=(self.id, "rebuild-driver"),
-        )
+        if not self.has_controller:
+            _ = self.controller
 
     @property
     def dialect(self) -> Optional["GcodeDialect"]:
