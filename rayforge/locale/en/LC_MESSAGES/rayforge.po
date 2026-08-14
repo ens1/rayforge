@@ -8381,6 +8381,11 @@ msgstr ""
 msgid "The Ruida controller connection did not close."
 msgstr ""
 
+#: rayforge/machine/driver/ruida/program_driver.py
+#, python-brace-format
+msgid "Ruida stop command failed: {error}"
+msgstr ""
+
 #: rayforge/machine/models/controller.py
 msgid ""
 "Machine configuration changed during reconnect. Reconnect again after "

@@ -236,6 +236,7 @@ class Driver(ABC):
     reports_granular_progress: bool = False
     reports_device_status: bool = True
     confirms_execution_completion: bool = True
+    supports_cancel: bool = True
     uses_gcode: bool = True
     accepts_arc_ops: bool = True
     accepts_curve_ops: bool = True

@@ -1,6 +1,6 @@
 asyncudp==0.11.0
 pyvips==3.1.1
 raygeo @ git+https://github.com/ens1/raygeo.git@e21f48c5eb54ebb41b0318b84b62a778005c1f37
-ruida-re @ git+https://github.com/ens1/ruida-re.git@fca3053d0a1409aaab6cd46326461bcf181f0243
+ruida-re @ git+https://github.com/ens1/ruida-re.git@912879daa692cb38b51ee810c07255cc68fb9602
 trimesh==5.0.0
 vtracer==0.6.15

@@ -79,6 +79,7 @@ class RuidaProgramDriver(Driver):
     reports_granular_progress = False
     reports_device_status = False
     confirms_execution_completion = False
+    supports_cancel = True
     uses_gcode = False
     accepts_arc_ops = False
     accepts_curve_ops = False
@@ -149,6 +150,11 @@ class RuidaProgramDriver(Driver):
         try:
             transport, resource = self._create_transport(module, **kwargs)
             client = module.ControllerClient(transport)
+            if not callable(getattr(client, "stop_process", None)):
+                raise DriverSetupError(
+                    "Installed ruida-re lacks required API: "
+                    "ControllerClient.stop_process"
+                )
         except DriverSetupError:
             raise
         except Exception as error:
@@ -455,7 +461,34 @@ class RuidaProgramDriver(Driver):
         self._raise_unsupported(_("hold and resume"))
 
     async def cancel(self) -> None:
-        self._raise_unsupported(_("cancel"))
+        client = self._client
+        if client is None or not getattr(client, "is_ready", False):
+            raise DeviceConnectionError(
+                _("The Ruida controller is not connected.")
+            )
+
+        self._execution_unconfirmed = True
+        try:
+            receipt = await self._call_blocking(client.stop_process)
+            completed_packets = receipt.completed_packets
+            retries = receipt.retries
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:
+            if not getattr(client, "is_ready", False):
+                self._update_connection_status(
+                    TransportStatus.ERROR, str(error)
+                )
+            message = _("Ruida stop command failed: {error}")
+            raise DeviceConnectionError(message.format(error=error)) from error
+
+        logger.info(
+            "Ruida stop command transferred: %d packet(s), %d retry(s). "
+            "Controller execution is not monitored.",
+            completed_packets,
+            retries,
+            extra=self._log_extra("USER_COMMAND"),
+        )
 
     def can_home(self, axis: Axis | None = None) -> bool:
         del axis

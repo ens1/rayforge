@@ -794,12 +794,17 @@ controller-specific guesses.
   the driver session and reconnects; it does not stop a running program or
   resend the previous job. After reconnecting, start the intended action
   separately.
+- Stop sends Ruida's software process-stop command. It remains available while
+  a submission is pending or execution is unconfirmed, but it is serialized
+  behind an active transfer. A host write or network acknowledgement does not
+  confirm that motion has halted, and Stop does not clear the visible-idle
+  confirmation requirement.
 
 :::warning
 The transfer-only drivers do not implement Ruida device management, position
-or execution status, homing, jogging, hold/resume, cancel, controller settings,
-or immediate laser controls. Use the machine's physical controller panel for
-those operations.
+or execution status, homing, jogging, hold/resume, controller settings, or
+immediate laser controls. Their software Stop command is not an emergency stop
+and cannot replace the machine's physical controls.
 :::
 
 Ruida is a binary protocol, so the G-code console, G-code macros, and G-code

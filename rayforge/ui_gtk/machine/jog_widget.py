@@ -35,6 +35,7 @@ class JogWidget(Gtk.Widget):
 
         self.machine: Machine | None = None
         self.machine_cmd: MachineCmd | None = None
+        self._motion_controls_enabled = False
         self.jog_speed = 1000
         self.jog_distance = 10.0
         self._buttons = []
@@ -77,7 +78,7 @@ class JogWidget(Gtk.Widget):
         self._jog_grid.attach(self.west_btn, 0, 1, 1, 1)
 
         self.home_all_btn = create_button("home-symbolic", _("Home All"))
-        self.home_all_btn.connect("clicked", self._on_home_all_clicked)
+        self.home_all_btn.set_action_name("win.machine-home")
         self._jog_grid.attach(self.home_all_btn, 1, 1, 1, 1)
 
         self.east_btn = create_button(
@@ -121,7 +122,7 @@ class JogWidget(Gtk.Widget):
         # Action column (separate grid for extra gap)
         self.send_btn = create_button("send-symbolic", _("Send to machine"))
         self.send_btn.add_css_class("suggested-action")
-        self.send_btn.connect("clicked", self._on_send_clicked)
+        self.send_btn.set_action_name("win.machine-send")
         self._action_grid.attach(self.send_btn, 0, 0, 1, 1)
 
         self.z_plus_btn = create_button(
@@ -140,7 +141,7 @@ class JogWidget(Gtk.Widget):
             "stop-symbolic", _("Cancel running job")
         )
         self.cancel_btn.add_css_class("destructive-action")
-        self.cancel_btn.connect("clicked", self._on_cancel_clicked)
+        self.cancel_btn.set_action_name("win.machine-cancel")
         self._action_grid.attach(self.cancel_btn, 0, 3, 1, 1)
 
         key_controller = Gtk.EventControllerKey()
@@ -221,6 +222,10 @@ class JogWidget(Gtk.Widget):
         self._update_button_sensitivity()
         self._update_limit_status()
 
+    def set_motion_controls_enabled(self, enabled: bool):
+        self._motion_controls_enabled = enabled
+        self._update_button_sensitivity()
+
     def _on_machine_changed(self, sender, **kwargs):
         self._update_button_sensitivity()
         self._update_limit_status()
@@ -241,12 +246,13 @@ class JogWidget(Gtk.Widget):
         self.home_x_btn.set_sensitive(False)
         self.home_y_btn.set_sensitive(False)
         self.home_z_btn.set_sensitive(False)
-        self.home_all_btn.set_sensitive(False)
-        self.send_btn.set_sensitive(False)
-        self.cancel_btn.set_sensitive(False)
 
         # Only enable buttons if machine exists, is connected
-        if self.machine is None or not self.machine.is_connected():
+        if (
+            self.machine is None
+            or not self.machine.is_connected()
+            or not self._motion_controls_enabled
+        ):
             return
 
         # Type assertion to help Pylance understand machine is not None
@@ -279,12 +285,6 @@ class JogWidget(Gtk.Widget):
         self.home_z_btn.set_sensitive(
             machine.can_home(Axis.Z) and single_axis_homing
         )
-        self.home_all_btn.set_sensitive(True)
-
-        # Send and Cancel buttons - always enabled when connected
-        self.send_btn.set_sensitive(True)
-        self.cancel_btn.set_sensitive(True)
-
         # Hide home buttons if single axis homing is not supported
         home_visible = single_axis_homing
         self.home_x_btn.set_visible(home_visible)
@@ -372,7 +372,11 @@ class JogWidget(Gtk.Widget):
         Helper to jog multiple axes simultaneously by sending a single
         command dictionary.
         """
-        if not self.machine or not self.machine_cmd:
+        if (
+            not self.machine
+            or not self.machine_cmd
+            or not self._motion_controls_enabled
+        ):
             return
 
         deltas = {}
@@ -383,7 +387,11 @@ class JogWidget(Gtk.Widget):
         if z != 0:
             deltas[Axis.Z] = z
 
-        if deltas:
+        confirmation_required = (
+            self.machine_cmd.execution_confirmation_required(self.machine)
+        )
+        can_jog = all(self.machine.can_jog(axis) for axis in deltas)
+        if deltas and can_jog and not confirmation_required:
             self.machine_cmd.jog(self.machine, deltas, self.jog_speed)
 
     def _on_x_plus_clicked(self, button):
@@ -478,35 +486,41 @@ class JogWidget(Gtk.Widget):
             )
             self._perform_jog(x=x_dist, y=y_dist)
 
-    def _on_home_all_clicked(self, button):
-        """Handle Home All button click."""
-        if self.machine and self.machine_cmd:
-            self.machine_cmd.home(self.machine)
-
     def _on_home_x_clicked(self, button):
         """Handle Home X button click."""
-        if self.machine and self.machine_cmd:
+        if (
+            self.machine
+            and self.machine_cmd
+            and self._motion_controls_enabled
+            and not self.machine_cmd.execution_confirmation_required(
+                self.machine
+            )
+        ):
             self.machine_cmd.home(self.machine, Axis.X)
 
     def _on_home_y_clicked(self, button):
         """Handle Home Y button click."""
-        if self.machine and self.machine_cmd:
+        if (
+            self.machine
+            and self.machine_cmd
+            and self._motion_controls_enabled
+            and not self.machine_cmd.execution_confirmation_required(
+                self.machine
+            )
+        ):
             self.machine_cmd.home(self.machine, Axis.Y)
 
     def _on_home_z_clicked(self, button):
         """Handle Home Z button click."""
-        if self.machine and self.machine_cmd:
+        if (
+            self.machine
+            and self.machine_cmd
+            and self._motion_controls_enabled
+            and not self.machine_cmd.execution_confirmation_required(
+                self.machine
+            )
+        ):
             self.machine_cmd.home(self.machine, Axis.Z)
-
-    def _on_send_clicked(self, button):
-        """Handle Send button click."""
-        if self.machine and self.machine_cmd:
-            self.machine_cmd.run_send_job(self.machine)
-
-    def _on_cancel_clicked(self, button):
-        """Handle Cancel button click."""
-        if self.machine and self.machine_cmd:
-            self.machine_cmd.cancel_job(self.machine)
 
     def _on_key_pressed(self, controller, keyval, keycode, state):
         """Handle key press events for cursor key jogging."""

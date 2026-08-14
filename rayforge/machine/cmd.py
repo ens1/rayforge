@@ -469,6 +469,8 @@ class MachineCmd:
     def cancel_job(self, machine: Machine):
         """Adds a task to cancel the currently running job on the machine."""
         driver = machine.driver
+        if not driver.confirms_execution_completion:
+            self._execution_confirmation_machine_ids.add(machine.id)
         self._editor.task_manager.add_coroutine(
             lambda ctx: driver.cancel(), key="cancel-job"
         )

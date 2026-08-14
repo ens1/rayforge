@@ -146,6 +146,8 @@ class MainWindow(Adw.ApplicationWindow):
         self.canvas3d: Canvas3D | None = None
         self._canvas3d_time_overlay: TimeEstimateOverlay | None = None
         self._is_syncing_3d = False
+        self._machine_job_submission_pending = False
+        self._machine_job_submission_machine_id: str | None = None
 
         # The ToastOverlay will wrap the main content box
         self.toast_overlay = Adw.ToastOverlay()
@@ -787,6 +789,12 @@ class MainWindow(Adw.ApplicationWindow):
 
     def _on_job_future_done(self, future: Future):
         """Callback for when the job submission task completes or fails."""
+        task_mgr.schedule_on_main_thread(self._finish_job_future, future)
+
+    def _finish_job_future(self, future: Future):
+        """Finish job submission handling on the GTK main thread."""
+        self._machine_job_submission_pending = False
+        self._machine_job_submission_machine_id = None
         try:
             # Check for exceptions during job assembly or submission.
             future.result()
@@ -1618,6 +1626,7 @@ class MainWindow(Adw.ApplicationWindow):
         doc = self.doc_editor.doc
 
         if not active_machine:
+            self.bottom_panel.jog_widget.set_motion_controls_enabled(False)
             am.get_action("export").set_enabled(False)
             am.get_action("machine-settings").set_enabled(False)
             am.get_action("machine-home").set_enabled(False)
@@ -1647,6 +1656,7 @@ class MainWindow(Adw.ApplicationWindow):
                 confirmation_required
                 and not task_mgr.has_tasks()
                 and not self.machine_cmd.is_job_running
+                and not self._machine_job_submission_pending
             )
 
             can_export = (
@@ -1696,11 +1706,18 @@ class MainWindow(Adw.ApplicationWindow):
                 machine_processing
                 or task_mgr.has_tasks()
                 or self.machine_cmd.is_job_running
+                or self._machine_job_submission_pending
             )
-
-            am.get_action("machine-home").set_enabled(
+            self.bottom_panel.jog_widget.set_motion_controls_enabled(
                 not is_job_or_task_active
             )
+
+            can_home = (
+                conn_status == TransportStatus.CONNECTED
+                and active_machine.can_home()
+                and not is_job_or_task_active
+            )
+            am.get_action("machine-home").set_enabled(can_home)
 
             can_frame = (
                 active_machine.can_frame()
@@ -1769,7 +1786,19 @@ class MainWindow(Adw.ApplicationWindow):
                 self.toolbar.hold_button.set_child(self.toolbar.hold_off_icon)
                 self.toolbar.hold_button.set_tooltip_text(_("Pause machine"))
 
-            cancel_sensitive = conn_status == TransportStatus.CONNECTED
+            cancel_sensitive = (
+                conn_status == TransportStatus.CONNECTED
+                and active_driver.supports_cancel
+                and (
+                    active_driver.reports_device_status
+                    or confirmation_required
+                    or (
+                        self._machine_job_submission_pending
+                        and self._machine_job_submission_machine_id
+                        == active_machine.id
+                    )
+                )
+            )
             am.get_action("machine-cancel").set_enabled(cancel_sensitive)
 
             clear_alarm_sensitive = bool(
@@ -2117,12 +2146,27 @@ class MainWindow(Adw.ApplicationWindow):
 
         self.machine_cmd.home(config.machine)
 
-    def _run_machine_job(self, job_coroutine: Coroutine):
+    def _run_machine_job(self, machine: Machine, job_coroutine: Coroutine):
         """
         Wraps a machine job coroutine in an asyncio.Task and handles
         its completion or failure.
         """
-        fut = asyncio.run_coroutine_threadsafe(job_coroutine, task_mgr.loop)
+        if self._machine_job_submission_pending:
+            job_coroutine.close()
+            return
+        self._machine_job_submission_pending = True
+        self._machine_job_submission_machine_id = machine.id
+        self._update_actions_and_ui()
+        try:
+            fut = asyncio.run_coroutine_threadsafe(
+                job_coroutine, task_mgr.loop
+            )
+        except Exception:
+            self._machine_job_submission_pending = False
+            self._machine_job_submission_machine_id = None
+            job_coroutine.close()
+            self._update_actions_and_ui()
+            raise
         # Add a callback to handle the result (or exception) of the task
         fut.add_done_callback(self._on_job_future_done)
 
@@ -2235,6 +2279,8 @@ class MainWindow(Adw.ApplicationWindow):
         machine = config.machine
         if not machine:
             return
+        if self._machine_job_submission_pending:
+            return
         if self._confirm_idle_before_next_job(machine):
             return
 
@@ -2249,17 +2295,27 @@ class MainWindow(Adw.ApplicationWindow):
             machine, on_progress=self._on_job_progress_updated
         )
         # Run the job using the helper
-        self._run_machine_job(job_coro)
+        self._run_machine_job(machine, job_coro)
 
     def on_send_clicked(self, action, param):
         config = get_context().config
         machine = config.machine
         if not machine:
             return
+        driver = machine.driver
+        if self._machine_job_submission_pending:
+            return
         if self._confirm_idle_before_next_job(machine):
             return
 
         def _proceed():
+            active_machine = get_context().config.machine
+            if active_machine is not machine or machine.driver is not driver:
+                return
+            if self._machine_job_submission_pending:
+                return
+            if self._confirm_idle_before_next_job(machine):
+                return
             focus_action = self.action_manager.get_action("toggle-focus")
             focus_state = focus_action.get_state()
             if focus_state and focus_state.get_boolean():
@@ -2269,7 +2325,7 @@ class MainWindow(Adw.ApplicationWindow):
                 machine,
                 on_progress=self._on_job_progress_updated,
             )
-            self._run_machine_job(job_coro)
+            self._run_machine_job(machine, job_coro)
 
         self._run_sanity_check_and_proceed(_proceed)
 

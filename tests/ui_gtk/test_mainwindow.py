@@ -358,6 +358,178 @@ def test_send_and_frame_stop_at_manual_confirmation(
     frame_job.assert_not_called()
 
 
+def test_bottom_panel_send_uses_guarded_window_action(
+    window_with_machine, mocker
+):
+    win, machine = window_with_machine
+    win.machine_cmd._execution_confirmation_machine_ids.add(machine.id)
+    prompt = mocker.patch.object(
+        win, "_confirm_idle_before_next_job", return_value=True
+    )
+    direct_send = mocker.patch.object(win.machine_cmd, "run_send_job")
+    win._update_actions_and_ui()
+
+    assert (
+        win.bottom_panel.jog_widget.send_btn.get_action_name()
+        == "win.machine-send"
+    )
+    assert (
+        win.bottom_panel.jog_widget.home_all_btn.get_action_name()
+        == "win.machine-home"
+    )
+    win.bottom_panel.jog_widget.send_btn.emit("clicked")
+
+    prompt.assert_called_once_with(machine)
+    direct_send.assert_not_called()
+
+
+def test_ruida_program_cancel_action_is_available(window_with_machine, mocker):
+    win, machine = window_with_machine
+    driver = MagicMock()
+    driver.state.error = None
+    driver.reports_device_status = False
+    driver.supports_cancel = True
+    driver.manual_execution_confirmation_required = True
+    mocker.patch.object(machine.controller, "driver", driver)
+    machine.set_connection_status(TransportStatus.CONNECTED)
+
+    win._update_actions_and_ui()
+
+    action = win.action_manager.get_action("machine-cancel")
+    assert action.get_enabled()
+    assert (
+        win.bottom_panel.jog_widget.cancel_btn.get_action_name()
+        == "win.machine-cancel"
+    )
+
+
+def test_transfer_driver_cancel_tracks_submission_or_confirmation(
+    window_with_machine, mocker
+):
+    win, machine = window_with_machine
+    driver = MagicMock()
+    driver.state.error = None
+    driver.reports_device_status = False
+    driver.supports_cancel = True
+    driver.manual_execution_confirmation_required = False
+    mocker.patch.object(machine.controller, "driver", driver)
+    machine.set_connection_status(TransportStatus.CONNECTED)
+
+    win._update_actions_and_ui()
+    action = win.action_manager.get_action("machine-cancel")
+    assert not action.get_enabled()
+
+    win._machine_job_submission_pending = True
+    win._machine_job_submission_machine_id = machine.id
+    win._update_actions_and_ui()
+    assert action.get_enabled()
+
+    win._machine_job_submission_pending = False
+    win._machine_job_submission_machine_id = None
+    win.machine_cmd._execution_confirmation_machine_ids.add(machine.id)
+    win._update_actions_and_ui()
+    assert action.get_enabled()
+
+
+def test_send_rechecks_confirmation_after_sanity_check(
+    window_with_machine, mocker
+):
+    win, machine = window_with_machine
+    pending = {}
+    mocker.patch.object(
+        win,
+        "_run_sanity_check_and_proceed",
+        side_effect=lambda proceed: pending.setdefault("proceed", proceed),
+    )
+    prompt = mocker.patch.object(
+        win, "_confirm_idle_before_next_job", return_value=False
+    )
+    run_job = mocker.patch.object(win, "_run_machine_job")
+
+    win.on_send_clicked(None, None)
+    win.machine_cmd._execution_confirmation_machine_ids.add(machine.id)
+    prompt.return_value = True
+    pending["proceed"]()
+
+    assert prompt.call_args_list == [
+        mocker.call(machine),
+        mocker.call(machine),
+    ]
+    run_job.assert_not_called()
+
+
+def test_pending_submission_disables_confirmation_actions(
+    window_with_machine, mocker
+):
+    win, machine = window_with_machine
+    win.machine_cmd._execution_confirmation_machine_ids.add(machine.id)
+    win._machine_job_submission_pending = True
+    mocker.patch(
+        "rayforge.ui_gtk.mainwindow.task_mgr.has_tasks", return_value=False
+    )
+
+    win._update_actions_and_ui()
+
+    assert not win.action_manager.get_action("machine-send").get_enabled()
+    assert not win.action_manager.get_action("machine-frame").get_enabled()
+
+
+def test_pending_submission_disables_motion_controls(
+    window_with_machine, mocker
+):
+    win, machine = window_with_machine
+    driver = MagicMock()
+    driver.state.error = None
+    driver.reports_device_status = False
+    driver.manual_execution_confirmation_required = False
+    mocker.patch.object(machine.controller, "driver", driver)
+    machine.set_connection_status(TransportStatus.CONNECTED)
+    machine.single_axis_homing_enabled = True
+    mocker.patch.object(machine, "can_jog", return_value=True)
+    mocker.patch.object(machine, "can_home", return_value=True)
+    mocker.patch(
+        "rayforge.ui_gtk.mainwindow.task_mgr.has_tasks", return_value=False
+    )
+
+    win._machine_job_submission_pending = False
+    win._update_actions_and_ui()
+    assert win.bottom_panel.jog_widget.east_btn.get_sensitive()
+    assert win.bottom_panel.jog_widget.home_x_btn.get_sensitive()
+
+    win._machine_job_submission_pending = True
+    win._update_actions_and_ui()
+    assert not win.bottom_panel.jog_widget.east_btn.get_sensitive()
+    assert not win.bottom_panel.jog_widget.home_x_btn.get_sensitive()
+
+
+def test_machine_job_submission_rejects_duplicate(window_with_machine, mocker):
+    win, _machine = window_with_machine
+    future = MagicMock()
+    submit = mocker.patch(
+        "rayforge.ui_gtk.mainwindow.asyncio.run_coroutine_threadsafe",
+        return_value=future,
+    )
+    mocker.patch.object(win, "_update_actions_and_ui")
+
+    async def _job():
+        return None
+
+    first = _job()
+    second = _job()
+    try:
+        win._run_machine_job(_machine, first)
+        win._run_machine_job(_machine, second)
+
+        submit.assert_called_once()
+        assert submit.call_args.args[0] is first
+        future.add_done_callback.assert_called_once_with(
+            win._on_job_future_done
+        )
+        assert second.cr_frame is None
+    finally:
+        first.close()
+
+
 @pytest.mark.asyncio
 async def test_confirmed_idle_task_only_reconnects(
     window_with_machine, mocker

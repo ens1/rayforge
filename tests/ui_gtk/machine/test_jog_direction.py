@@ -112,10 +112,12 @@ def test_jog_button_direction(
     mock_machine_cmd = MagicMock()
     mock_jog = MagicMock()
     mock_machine_cmd.jog = mock_jog
+    mock_machine_cmd.execution_confirmation_required.return_value = False
 
     # 3. Create JogWidget
     jog_widget = JogWidget()
     jog_widget.set_machine(machine, mock_machine_cmd)
+    jog_widget.set_motion_controls_enabled(True)
     jog_widget.jog_distance = JOG_DISTANCE
     jog_widget.jog_speed = JOG_SPEED
 
@@ -127,6 +129,56 @@ def test_jog_button_direction(
     mock_jog.assert_called_once_with(
         machine, {expected_axis: expectation}, JOG_SPEED
     )
+
+
+@pytest.mark.ui
+def test_jog_dispatch_is_blocked_while_confirmation_is_required(
+    ui_context_initializer,
+    mocker,
+):
+    from rayforge.ui_gtk.machine.jog_widget import JogWidget
+
+    machine = Machine(ui_context_initializer)
+    ui_context_initializer.machine_mgr.add_machine(machine)
+    machine.connection_status = TransportStatus.CONNECTED
+    mocker.patch.object(machine, "can_jog", return_value=True)
+    machine_cmd = MagicMock()
+    machine_cmd.execution_confirmation_required.return_value = True
+    jog_widget = JogWidget()
+    jog_widget.set_machine(machine, machine_cmd)
+    jog_widget.set_motion_controls_enabled(True)
+
+    jog_widget._on_x_plus_clicked(None)
+
+    machine_cmd.jog.assert_not_called()
+
+
+@pytest.mark.ui
+def test_motion_dispatch_is_blocked_while_controls_are_disabled(
+    ui_context_initializer,
+    mocker,
+):
+    from rayforge.ui_gtk.machine.jog_widget import JogWidget
+
+    machine = Machine(ui_context_initializer)
+    ui_context_initializer.machine_mgr.add_machine(machine)
+    machine.connection_status = TransportStatus.CONNECTED
+    machine.single_axis_homing_enabled = True
+    mocker.patch.object(machine, "can_jog", return_value=True)
+    mocker.patch.object(machine, "can_home", return_value=True)
+    machine_cmd = MagicMock()
+    machine_cmd.execution_confirmation_required.return_value = False
+    jog_widget = JogWidget()
+    jog_widget.set_machine(machine, machine_cmd)
+    jog_widget.set_motion_controls_enabled(False)
+
+    jog_widget._on_x_plus_clicked(None)
+    jog_widget._on_home_x_clicked(None)
+
+    assert not jog_widget.east_btn.get_sensitive()
+    assert not jog_widget.home_x_btn.get_sensitive()
+    machine_cmd.jog.assert_not_called()
+    machine_cmd.home.assert_not_called()
 
 
 LIMIT_SCENARIOS = [

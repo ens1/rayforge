@@ -104,6 +104,7 @@ class FakeControllerClient:
         self.close_before_error = False
         self.send_error: Exception | None = None
         self.sent_programs = []
+        self.stop_calls = 0
         self.events = []
         self.open_started: threading.Event | None = None
         self.open_release: threading.Event | None = None
@@ -152,6 +153,12 @@ class FakeControllerClient:
             raise self.send_error
         self.sent_programs.append(program)
         self.events.append("send-complete")
+        return self.receipt
+
+    def stop_process(self):
+        self.stop_calls += 1
+        if self.send_error is not None:
+            raise self.send_error
         return self.receipt
 
 
@@ -242,6 +249,28 @@ def test_program_setup_rejects_ambiguous_laser_tool_mapping(
     assert driver._transport is None
 
 
+def test_program_setup_requires_stop_process_api(fake_api, driver_objects):
+    api, _codec = fake_api
+    create_client = api.ControllerClient
+
+    def create_client_without_stop(transport):
+        client = create_client(transport)
+        client.stop_process = None
+        return client
+
+    api.ControllerClient = create_client_without_stop
+    context, machine = driver_objects
+    driver = RuidaSerialDriver(context, machine)
+
+    driver.setup(port="/dev/cu.ruida", baudrate=115200)
+
+    assert driver.state.error is not None
+    assert driver.state.error.title == (
+        "Installed ruida-re lacks required API: ControllerClient.stop_process"
+    )
+    assert driver._transport is None
+
+
 @pytest.mark.asyncio
 async def test_accepts_complete_rd_from_real_compiler(
     monkeypatch, driver_objects
@@ -325,6 +354,7 @@ async def test_execution_latch_clears_only_after_successful_reopen(
     driver.setup(**setup_args)
     await driver.connect()
     assert driver.reports_device_status is False
+    assert driver.supports_cancel is True
     assert driver.manual_execution_confirmation_required is False
 
     await driver.run(make_output(), MagicMock(), MagicMock())
@@ -351,6 +381,65 @@ async def test_execution_latch_clears_only_after_successful_reopen(
 
     assert driver._execution_unconfirmed is False
     assert driver.manual_execution_confirmation_required is False
+    assert client.sent_programs == []
+    await driver.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_cancel_sends_process_stop_and_retains_execution_latch(
+    fake_api, driver_objects
+):
+    context, machine = driver_objects
+    driver = RuidaSerialDriver(context, machine)
+    driver.setup(port="/dev/cu.ruida", baudrate=115200)
+    await driver.connect()
+    client = client_for(driver)
+    driver._execution_unconfirmed = True
+
+    await driver.cancel()
+
+    assert client.stop_calls == 1
+    assert client.sent_programs == []
+    assert driver.manual_execution_confirmation_required is True
+    await driver.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_cancel_serializes_exact_process_stop_wire_bytes(
+    monkeypatch, driver_objects
+):
+    ruida_re = pytest.importorskip("ruida_re")
+    monkeypatch.setattr(program_driver, "_load_ruida_re", lambda: ruida_re)
+    context, machine = driver_objects
+    driver = RuidaSerialDriver(context, machine)
+    transport = MemorySerialTransport()
+    client = ruida_re.ControllerClient(transport)
+    client.open(probe=False)
+    driver._transport = transport
+    driver._client = client
+
+    await driver.cancel()
+
+    assert transport.sent == [bytes.fromhex("d209")]
+    assert driver.manual_execution_confirmation_required is True
+    await driver.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_cancel_failure_retains_execution_latch(
+    fake_api, driver_objects
+):
+    context, machine = driver_objects
+    driver = RuidaSerialDriver(context, machine)
+    driver.setup(port="/dev/cu.ruida", baudrate=115200)
+    await driver.connect()
+    client = client_for(driver)
+    client.send_error = OSError("stop write failed")
+
+    with pytest.raises(DeviceConnectionError, match="stop write failed"):
+        await driver.cancel()
+
+    assert driver.manual_execution_confirmation_required is True
     assert client.sent_programs == []
     await driver.cleanup()
 

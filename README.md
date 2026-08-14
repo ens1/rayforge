@@ -117,8 +117,15 @@ the default. Advanced behavior must be enabled with an explicit research
 profile. Because these transports do not report execution completion, the
 next Send or Frame action requires the operator to confirm that the controller
 is visibly idle. Rayforge then opens a fresh connection without resending the
-previous job; the operator starts the next action separately. Narrow
-planned-path coupons have been run on a Boss LS2040 over USB
+previous job; the operator starts the next action separately.
+
+The Stop action sends Ruida's software process-stop command. It remains
+available during a submission and while execution is unconfirmed, but it is
+serialized behind any active transfer and is not an emergency stop. A host
+write or network acknowledgement does not prove that motion has halted, so
+Stop does not clear the visible-idle confirmation requirement.
+
+Narrow planned-path coupons have been run on a Boss LS2040 over USB
 serial. A direct 10% coupon produced the expected motion without visible
 marks, while direct and Rayforge-generated 15% single-section coupons produced
 visible lines. A separate Rayforge 15% cross-hatch coupon executed two

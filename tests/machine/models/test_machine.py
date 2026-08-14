@@ -723,6 +723,27 @@ class TestMachine:
         select_tool_spy.assert_called_once_with(5)
 
     @pytest.mark.asyncio
+    async def test_cancel_latches_unmonitored_machine_immediately(
+        self,
+        machine: Machine,
+        mocker,
+        task_mgr: TaskManager,
+        doc_editor: DocEditor,
+    ):
+        await wait_for_tasks_to_finish(task_mgr)
+        mocker.patch.object(
+            type(machine.driver),
+            "confirms_execution_completion",
+            False,
+        )
+        machine_cmd = MachineCmd(doc_editor)
+
+        machine_cmd.cancel_job(machine)
+
+        assert machine_cmd.execution_confirmation_required(machine)
+        await wait_for_tasks_to_finish(task_mgr)
+
+    @pytest.mark.asyncio
     async def test_shutdown_cleans_up_driver(
         self, machine: Machine, mocker, task_mgr: TaskManager
     ):
