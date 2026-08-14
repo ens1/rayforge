@@ -788,8 +788,12 @@ controller-specific guesses.
   the transport's protocol contract. It does **not** confirm that physical
   execution has completed.
 - After a completed or ambiguous transfer, Rayforge treats controller
-  execution as unconfirmed and refuses another transfer. Reconnect only after
-  the controller is visibly idle.
+  execution as unconfirmed and refuses another transfer. The next Send or
+  Frame action asks the operator to confirm that the controller is visibly
+  idle and that motion and laser emission have stopped. Confirmation replaces
+  the driver session and reconnects; it does not stop a running program or
+  resend the previous job. After reconnecting, start the intended action
+  separately.
 
 :::warning
 The transfer-only drivers do not implement Ruida device management, position

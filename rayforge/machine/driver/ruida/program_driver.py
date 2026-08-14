@@ -24,6 +24,7 @@ from ..driver import (
     Driver,
     DriverMaturity,
     DriverSetupError,
+    ExecutionCompletionUnknownError,
     Pos,
     PWMParams,
 )
@@ -76,6 +77,7 @@ class RuidaProgramDriver(Driver):
 
     supports_settings = False
     reports_granular_progress = False
+    reports_device_status = False
     confirms_execution_completion = False
     uses_gcode = False
     accepts_arc_ops = False
@@ -121,6 +123,10 @@ class RuidaProgramDriver(Driver):
     @property
     def resource_uri(self) -> str | None:
         return self._resource
+
+    @property
+    def manual_execution_confirmation_required(self) -> bool:
+        return self._execution_unconfirmed
 
     @classmethod
     def create_encoder(cls, machine: Machine) -> OpsEncoder:
@@ -169,7 +175,16 @@ class RuidaProgramDriver(Driver):
                 probe=self._probe_on_open,
             )
         except asyncio.CancelledError:
-            self._update_connection_status(TransportStatus.DISCONNECTED)
+            await self._close_after_cancelled_open(client)
+            if getattr(client, "is_open", False) or getattr(
+                client, "is_ready", False
+            ):
+                self._update_connection_status(
+                    TransportStatus.ERROR,
+                    _("Could not close the cancelled Ruida connection."),
+                )
+            else:
+                self._update_connection_status(TransportStatus.DISCONNECTED)
             raise
         except Exception as error:
             message = _("Could not connect to the Ruida controller: {error}")
@@ -177,35 +192,89 @@ class RuidaProgramDriver(Driver):
             self._update_connection_status(TransportStatus.ERROR, str(wrapped))
             raise wrapped from error
 
+        self._execution_unconfirmed = False
         self._update_connection_status(TransportStatus.CONNECTED)
+
+    async def _close_after_cancelled_open(self, client: Any) -> None:
+        if not (
+            getattr(client, "is_open", False)
+            or getattr(client, "is_ready", False)
+        ):
+            return
+        try:
+            await self._call_blocking(client.close)
+        except asyncio.CancelledError:
+            pass
+        except Exception as error:  # noqa: BLE001 - cancellation cleanup
+            logger.warning(
+                "Could not close cancelled Ruida program transport: %s",
+                error,
+                extra=self._log_extra("MACHINE_EVENT"),
+            )
 
     async def cleanup(self) -> None:
         client = self._client
-        try:
-            if client is not None and getattr(client, "is_open", False):
-                self._update_connection_status(TransportStatus.CLOSING)
-                try:
-                    await self._call_blocking(client.close)
-                except asyncio.CancelledError:
-                    raise
-                except OSError as error:
-                    logger.warning(
-                        "Could not close Ruida program transport: %s",
-                        error,
-                        extra=self._log_extra("MACHINE_EVENT"),
+        if client is not None and (
+            getattr(client, "is_open", False)
+            or getattr(client, "is_ready", False)
+        ):
+            self._update_connection_status(TransportStatus.CLOSING)
+            try:
+                await self._call_blocking(
+                    client.close,
+                    _preserve_cancellation_on_error=True,
+                )
+            except asyncio.CancelledError:
+                if getattr(client, "is_open", False) or getattr(
+                    client, "is_ready", False
+                ):
+                    self._update_connection_status(
+                        TransportStatus.ERROR,
+                        _("The Ruida controller connection is still open."),
                     )
-        finally:
-            self._client = None
-            self._transport = None
-            self._resource = None
-            self._execution_unconfirmed = False
-            self._update_connection_status(TransportStatus.DISCONNECTED)
-            await super().cleanup()
+                else:
+                    await self._finalize_cleanup()
+                raise
+            except Exception as error:
+                if getattr(client, "is_open", False) or getattr(
+                    client, "is_ready", False
+                ):
+                    message = _(
+                        "Could not close the Ruida controller connection: "
+                        "{error}"
+                    ).format(error=error)
+                    self._update_connection_status(
+                        TransportStatus.ERROR, message
+                    )
+                    raise DeviceConnectionError(message) from error
+                logger.warning(
+                    "Ruida program transport reported an error after closing: "
+                    "%s",
+                    error,
+                    extra=self._log_extra("MACHINE_EVENT"),
+                )
+
+            if getattr(client, "is_open", False) or getattr(
+                client, "is_ready", False
+            ):
+                message = _("The Ruida controller connection did not close.")
+                self._update_connection_status(TransportStatus.ERROR, message)
+                raise DeviceConnectionError(message)
+
+        await self._finalize_cleanup()
+
+    async def _finalize_cleanup(self) -> None:
+        self._client = None
+        self._transport = None
+        self._resource = None
+        self._update_connection_status(TransportStatus.DISCONNECTED)
+        await super().cleanup()
 
     async def _call_blocking(
         self,
         operation: Callable[..., Any],
         *args: Any,
+        _preserve_cancellation_on_error: bool = False,
         **kwargs: Any,
     ) -> Any:
         async with self._io_lock:
@@ -219,7 +288,9 @@ class RuidaProgramDriver(Driver):
                 except asyncio.CancelledError:
                     cancelled = True
                     continue
-                except BaseException:
+                except BaseException as error:
+                    if cancelled and _preserve_cancellation_on_error:
+                        raise asyncio.CancelledError from error
                     raise
                 break
             if cancelled:
@@ -288,7 +359,7 @@ class RuidaProgramDriver(Driver):
         on_command_done: Callable[[int], None | Awaitable[None]] | None,
     ) -> None:
         if self._execution_unconfirmed:
-            raise DeviceConnectionError(
+            raise ExecutionCompletionUnknownError(
                 _(
                     "The previous Ruida program may still be executing. "
                     "Reconnect only after the controller is visibly idle."
@@ -328,7 +399,12 @@ class RuidaProgramDriver(Driver):
                     TransportStatus.ERROR, str(error)
                 )
             message = _("Ruida program transfer failed: {error}")
-            raise DeviceConnectionError(message.format(error=error)) from error
+            error_cls = (
+                ExecutionCompletionUnknownError
+                if transfer_started
+                else DeviceConnectionError
+            )
+            raise error_cls(message.format(error=error)) from error
 
         self._execution_unconfirmed = True
         try:
@@ -338,7 +414,9 @@ class RuidaProgramDriver(Driver):
             message = _(
                 "Ruida program transfer returned an invalid receipt: {error}"
             )
-            raise DeviceConnectionError(message.format(error=error)) from error
+            raise ExecutionCompletionUnknownError(
+                message.format(error=error)
+            ) from error
 
         logger.info(
             "Ruida program transfer completed: %d packet(s), %d retry(s). "

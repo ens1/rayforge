@@ -47,6 +47,18 @@ class MachineController:
         self.machine = machine
         self.context = context
         self._scheduler = scheduler
+        self._driver_lifecycle_lock = asyncio.Lock()
+        self._driver_lifecycle_epoch = 0
+        self._last_lifecycle_name: str | None = None
+        self._last_lifecycle_args: dict[str, Any] = {}
+        self._last_lifecycle_config: dict[str, Any] = {}
+        self._last_lifecycle_succeeded = False
+        self._active_driver_name: str | None = None
+        self._active_driver_args: dict[str, Any] = {}
+        self._active_driver_config: dict[str, Any] = {}
+        self._active_driver_connected = False
+        self._active_driver_connect_started = False
+        self._active_driver_cleaned = False
 
         # Controller signals - Machine will connect to these and re-emit
         self.connection_status_changed = Signal()
@@ -62,6 +74,7 @@ class MachineController:
         # Track the last driver configuration to detect changes
         self._last_driver_name = self.machine.driver_name
         self._last_driver_args = self.machine.driver_args.copy()
+        self._last_driver_config = self.machine.driver_config.copy()
 
         # The WCS that the device has actually confirmed via $G query.
         # Used to guard _sync_wcs_offset_from_wco against stale WCO
@@ -82,18 +95,53 @@ class MachineController:
 
     async def connect(self):
         """Public method to connect the driver."""
-        if self.driver is not None:
-            await self.driver.connect()
+        async with self._driver_lifecycle_lock:
+            if self._active_driver_cleaned:
+                await self._run_rebuild_locked(
+                    requested_name=self.machine.driver_name,
+                    requested_args=self.machine.driver_args.copy(),
+                    requested_config=self.machine.driver_config.copy(),
+                    should_connect=True,
+                    explicit_connect=True,
+                )
+                return
+            if self._active_driver_connect_started:
+                return
+            driver = self.driver
+            self._active_driver_connect_started = True
+            try:
+                await driver.connect()
+            except BaseException:
+                self._active_driver_connected = False
+                self._active_driver_connect_started = False
+                raise
 
     async def disconnect(self):
         """Public method to disconnect the driver."""
         task_mgr.cancel_task((self.machine.id, "driver-connect"))
-        if self.driver is not None:
-            await self.driver.cleanup()
-            task_mgr.add_coroutine(
-                self.rebuild_driver,
-                key=(self.machine.id, "rebuild-driver"),
+        async with self._driver_lifecycle_lock:
+            if not self._active_driver_cleaned:
+                try:
+                    await self.driver.cleanup()
+                except BaseException:
+                    self._active_driver_cleaned = not self.driver.did_setup
+                    self._active_driver_connected = False
+                    self._active_driver_connect_started = False
+                    raise
+                self._active_driver_cleaned = True
+                self._active_driver_connected = False
+                self._active_driver_connect_started = False
+            await self._run_rebuild_locked(
+                requested_name=self.machine.driver_name,
+                requested_args=self.machine.driver_args.copy(),
+                requested_config=self.machine.driver_config.copy(),
+                should_connect=False,
+                explicit_connect=False,
             )
+
+    async def reconnect(self):
+        """Replace the active driver and explicitly open a fresh connection."""
+        await self.rebuild_driver(connect=True)
 
     async def shutdown(self):
         """
@@ -105,10 +153,17 @@ class MachineController:
         )
         task_mgr.cancel_task((self.machine.id, "driver-connect"))
         task_mgr.cancel_task((self.machine.id, "rebuild-driver"))
+        task_mgr.cancel_task((self.machine.id, "rebuild-driver-on-init"))
         task_mgr.cancel_task((self.machine.id, "rebuild-driver-on-change"))
-        if self.driver is not None:
-            await self.driver.cleanup()
-        self._disconnect_driver_signals()
+        async with self._driver_lifecycle_lock:
+            if not self._active_driver_cleaned:
+                try:
+                    await self.driver.cleanup()
+                finally:
+                    self._active_driver_cleaned = not self.driver.did_setup
+                    self._active_driver_connected = False
+                    self._active_driver_connect_started = False
+            self._disconnect_driver_signals()
         self.machine.changed.disconnect(self._on_machine_changed)
         self.context.dialect_mgr.dialects_changed.disconnect(
             self._on_dialects_changed
@@ -121,13 +176,16 @@ class MachineController:
         """
         current_driver_name = self.machine.driver_name
         current_driver_args = self.machine.driver_args
+        current_driver_config = self.machine.driver_config
 
         if (
             current_driver_name != self._last_driver_name
             or current_driver_args != self._last_driver_args
+            or current_driver_config != self._last_driver_config
         ):
             self._last_driver_name = current_driver_name
             self._last_driver_args = current_driver_args.copy()
+            self._last_driver_config = current_driver_config.copy()
             task_mgr.add_coroutine(
                 self.rebuild_driver,
                 key=(self.machine.id, "rebuild-driver-on-change"),
@@ -170,59 +228,218 @@ class MachineController:
         """
         self.machine.changed.send(self.machine)
 
-    async def rebuild_driver(self, ctx: Optional["ExecutionContext"] = None):
+    async def rebuild_driver(
+        self,
+        ctx: Optional["ExecutionContext"] = None,
+        *,
+        connect: bool | None = None,
+    ):
         """
         Instantiates and sets up the driver based on the machine's current
-        configuration. Connects if auto_connect is enabled and the new driver
-        is not NoDeviceDriver.
+        configuration. By default, connects when auto_connect is enabled.
+        An explicit connect value overrides auto_connect for this rebuild.
         """
+        del ctx
+        requested_name = self.machine.driver_name
+        requested_args = self.machine.driver_args.copy()
+        requested_config = self.machine.driver_config.copy()
+        should_connect = (
+            self.machine.auto_connect if connect is None else connect
+        )
+        observed_epoch = self._driver_lifecycle_epoch
+
+        async with self._driver_lifecycle_lock:
+            if self._can_coalesce_rebuild(
+                observed_epoch,
+                requested_name,
+                requested_args,
+                requested_config,
+                should_connect,
+            ):
+                return
+
+            await self._run_rebuild_locked(
+                requested_name=requested_name,
+                requested_args=requested_args,
+                requested_config=requested_config,
+                should_connect=should_connect,
+                explicit_connect=connect is True,
+            )
+
+    async def _run_rebuild_locked(
+        self,
+        *,
+        requested_name: str | None,
+        requested_args: dict[str, Any],
+        requested_config: dict[str, Any],
+        should_connect: bool,
+        explicit_connect: bool,
+    ) -> None:
+        succeeded = False
+        try:
+            succeeded, connect_started = await self._rebuild_driver_locked(
+                requested_name=requested_name,
+                requested_args=requested_args,
+                requested_config=requested_config,
+                should_connect=should_connect,
+                explicit_connect=explicit_connect,
+            )
+            if succeeded:
+                self._active_driver_connect_started = connect_started
+        finally:
+            self._driver_lifecycle_epoch += 1
+            self._last_lifecycle_name = requested_name
+            self._last_lifecycle_args = requested_args.copy()
+            self._last_lifecycle_config = requested_config.copy()
+            self._last_lifecycle_succeeded = succeeded
+
+    def _can_coalesce_rebuild(
+        self,
+        observed_epoch: int,
+        requested_name: str | None,
+        requested_args: dict[str, Any],
+        requested_config: dict[str, Any],
+        should_connect: bool,
+    ) -> bool:
+        return (
+            observed_epoch != self._driver_lifecycle_epoch
+            and self._last_lifecycle_succeeded
+            and self._last_lifecycle_name == requested_name
+            and self._last_lifecycle_args == requested_args
+            and self._last_lifecycle_config == requested_config
+            and self._active_driver_name == requested_name
+            and self._active_driver_args == requested_args
+            and self._active_driver_config == requested_config
+            and (not should_connect or self._active_driver_connect_started)
+        )
+
+    async def _rebuild_driver_locked(
+        self,
+        *,
+        requested_name: str | None,
+        requested_args: dict[str, Any],
+        requested_config: dict[str, Any],
+        should_connect: bool,
+        explicit_connect: bool,
+    ) -> tuple[bool, bool]:
         logger.info(
             f"Machine '{self.machine.name}' (id:{self.machine.id}) rebuilding "
-            f"driver to '{self.machine.driver_name}'"
+            f"driver to '{requested_name}'"
         )
 
         old_driver = self.driver
-        self._disconnect_driver_signals()
         self.machine.set_precheck_error(None)
 
-        if self.machine.driver_name:
-            driver_cls = get_driver_cls(self.machine.driver_name)
+        if requested_name:
+            driver_cls = get_driver_cls(requested_name)
         else:
             driver_cls = NoDeviceDriver
 
         try:
-            driver_cls.precheck(**self.machine.driver_args)
+            driver_cls.precheck(**requested_args)
         except DriverPrecheckError as e:
-            logger.warning(
-                f"Precheck failed for driver {self.machine.driver_name}: {e}"
-            )
+            logger.warning(f"Precheck failed for driver {requested_name}: {e}")
             self.machine.set_precheck_error(str(e))
 
         new_driver = driver_cls(self.context, self.machine)
-        new_driver.setup(**self.machine.driver_args)
-        new_driver.config = self.machine.driver_config.copy()
+        new_driver.setup(**requested_args)
+        new_driver.config = requested_config
 
-        self.driver = new_driver
-        self._connect_driver_signals()
-
-        self._last_driver_name = self.machine.driver_name
-        self._last_driver_args = self.machine.driver_args.copy()
-
-        self._scheduler(self.machine.changed.send, self.machine)
-
-        if old_driver:
-            await old_driver.cleanup()
+        if old_driver and not self._active_driver_cleaned:
+            try:
+                await old_driver.cleanup()
+            except asyncio.CancelledError:
+                self._active_driver_cleaned = not old_driver.did_setup
+                await self._discard_candidate(new_driver)
+                raise
+            except Exception:
+                self._active_driver_cleaned = not old_driver.did_setup
+                await self._discard_candidate(new_driver)
+                raise
+            self._active_driver_cleaned = True
 
         if (
-            self.machine.auto_connect
-            and new_driver.state.error is None
-            and not isinstance(new_driver, NoDeviceDriver)
+            requested_name != self.machine.driver_name
+            or requested_args != self.machine.driver_args
+            or requested_config != self.machine.driver_config
         ):
+            await self._discard_candidate(new_driver)
+            if explicit_connect:
+                raise DeviceConnectionError(
+                    _(
+                        "Machine configuration changed during reconnect. "
+                        "Reconnect again after confirming the controller is "
+                        "visibly idle."
+                    )
+                )
+            return False, False
+
+        self._disconnect_driver_signals()
+        self.driver = new_driver
+        self._active_driver_name = requested_name
+        self._active_driver_args = requested_args.copy()
+        self._active_driver_config = requested_config.copy()
+        self._active_driver_connected = False
+        self._active_driver_connect_started = False
+        self._active_driver_cleaned = False
+        self._connect_driver_signals()
+
+        self._last_driver_name = requested_name
+        self._last_driver_args = requested_args.copy()
+        self._last_driver_config = requested_config.copy()
+        self._scheduler(self.machine.changed.send, self.machine)
+
+        can_connect = new_driver.state.error is None and not isinstance(
+            new_driver, NoDeviceDriver
+        )
+        if should_connect and can_connect:
             logger.info(
                 f"Machine '{self.machine.name}' (id:{self.machine.id}) "
                 f"connecting after driver rebuild"
             )
-            await self.driver.connect()
+            self._active_driver_connect_started = True
+            try:
+                await new_driver.connect()
+            except asyncio.CancelledError:
+                self._active_driver_connect_started = False
+                await self._cleanup_installed_after_cancellation(new_driver)
+                raise
+            except Exception:
+                self._active_driver_connect_started = False
+                raise
+            return True, True
+        if explicit_connect:
+            if isinstance(new_driver, NoDeviceDriver):
+                message = _("No machine driver is configured.")
+            else:
+                error = new_driver.state.error
+                message = error.title if error else _("Driver setup failed.")
+            raise DeviceConnectionError(message)
+        return True, False
+
+    async def _discard_candidate(self, driver: Driver) -> None:
+        try:
+            await driver.cleanup()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Failed to clean up a discarded machine driver")
+
+    async def _cleanup_installed_after_cancellation(
+        self, driver: Driver
+    ) -> None:
+        self._active_driver_connected = False
+        self._active_driver_connect_started = False
+        try:
+            await driver.cleanup()
+        except asyncio.CancelledError:
+            self._active_driver_cleaned = not driver.did_setup
+            raise
+        except Exception:
+            self._active_driver_cleaned = not driver.did_setup
+            logger.exception("Failed to clean up a cancelled machine driver")
+        else:
+            self._active_driver_cleaned = True
 
     def _reset_status(self):
         """Resets status to a disconnected/unknown state and signals it."""
@@ -257,6 +474,10 @@ class MachineController:
         message: str | None = None,
     ):
         """Proxies the connection status signal from the active driver."""
+        if driver is self.driver:
+            self._active_driver_connected = status == TransportStatus.CONNECTED
+            if self._active_driver_connected:
+                self._active_driver_connect_started = True
         if self.machine.connection_status != status:
             self.machine.set_connection_status(status)
             self._scheduler(
@@ -312,7 +533,10 @@ class MachineController:
 
     def _on_driver_config_changed(self, driver: Driver):
         """Syncs the driver's runtime config to the machine."""
-        self.machine.driver_config = driver.config.copy()
+        config = driver.config.copy()
+        self.machine.driver_config = config
+        self._last_driver_config = config.copy()
+        self._active_driver_config = config.copy()
 
     def _on_driver_job_finished(self, driver: Driver):
         """Proxies the job finished signal from the active driver."""

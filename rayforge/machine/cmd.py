@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from collections.abc import Callable, Coroutine
@@ -18,6 +19,10 @@ from ..pipeline.encoder.base import EncodedOutput
 from ..pipeline.encoder.context import GcodeContext, JobInfo
 from ..shared.util.template import TemplateFormatter
 from .driver import get_driver_cls
+from .driver.driver import (
+    DeviceConnectionError,
+    ExecutionCompletionUnknownError,
+)
 from .driver.dummy import NoDeviceDriver
 from .job_monitor import JobMonitor
 
@@ -85,7 +90,8 @@ class MachineCmd:
         self.job_transferred = Signal()
         self._current_monitor: JobMonitor | None = None
         self._on_progress_callback: Callable[[dict], None] | None = None
-        self._execution_completion_unknown = False
+        self._execution_confirmation_machine_ids: set[str] = set()
+        self._confirmed_idle_reconnect_machine_ids: set[str] = set()
 
     @property
     def is_job_running(self) -> bool:
@@ -94,8 +100,15 @@ class MachineCmd:
 
     @property
     def execution_completion_unknown(self) -> bool:
-        """Whether the last successful submission lacked execution status."""
-        return self._execution_completion_unknown
+        """Whether any submitted job lacks execution completion status."""
+        return bool(self._execution_confirmation_machine_ids)
+
+    def execution_confirmation_required(self, machine: Machine) -> bool:
+        """Whether this machine requires confirmed-idle reconnection."""
+        return bool(
+            machine.id in self._execution_confirmation_machine_ids
+            or machine.driver.manual_execution_confirmation_required
+        )
 
     def select_tool(self, machine: Machine, head_index: int):
         """Adds a 'select_head' task to the task manager."""
@@ -109,6 +122,26 @@ class MachineCmd:
         self._editor.task_manager.add_coroutine(
             lambda ctx: machine.select_tool(tool_number), key="select-head"
         )
+
+    async def reconnect_after_confirmed_idle(self, machine: Machine) -> None:
+        """Reconnect after manual idle confirmation without retrying a job."""
+        machine_id = machine.id
+        if machine_id in self._confirmed_idle_reconnect_machine_ids:
+            raise DeviceConnectionError(
+                _("A confirmed-idle reconnect is already in progress.")
+            )
+
+        self._confirmed_idle_reconnect_machine_ids.add(machine_id)
+        self._execution_confirmation_machine_ids.add(machine_id)
+        try:
+            await machine.reconnect()
+        except BaseException:
+            self._execution_confirmation_machine_ids.add(machine_id)
+            raise
+        else:
+            self._execution_confirmation_machine_ids.discard(machine_id)
+        finally:
+            self._confirmed_idle_reconnect_machine_ids.discard(machine_id)
 
     def _progress_handler(self, sender, metrics):
         """Signal handler for job progress updates."""
@@ -139,6 +172,7 @@ class MachineCmd:
                 machine.driver.job_finished.send(machine.driver)
             return
 
+        driver = machine.driver
         # Store the callback
         self._on_progress_callback = on_progress
 
@@ -171,16 +205,16 @@ class MachineCmd:
             if encoded is None:
                 raise RuntimeError("Pipeline did not produce encoded output.")
 
-            confirms_completion = machine.driver.confirms_execution_completion
+            confirms_completion = driver.confirms_execution_completion
             if machine.reports_granular_progress and confirms_completion:
-                await machine.driver.run(
+                await driver.run(
                     encoded,
                     self._editor.doc,
                     ops,
                     on_command_done=self._current_monitor.update_progress,
                 )
             else:
-                await machine.driver.run(
+                await driver.run(
                     encoded,
                     self._editor.doc,
                     ops,
@@ -188,7 +222,7 @@ class MachineCmd:
                 )
 
             if not confirms_completion:
-                self._execution_completion_unknown = True
+                self._execution_confirmation_machine_ids.add(machine.id)
                 self._scheduler(
                     self.job_transferred.send,
                     self,
@@ -203,7 +237,7 @@ class MachineCmd:
 
             if not machine.reports_granular_progress and self._current_monitor:
                 self._current_monitor.mark_as_complete()
-            self._execution_completion_unknown = False
+            self._execution_confirmation_machine_ids.discard(machine.id)
 
             estimated_seconds = ops.estimate_time(
                 default_feed_rate=machine.max_cut_speed,
@@ -216,6 +250,10 @@ class MachineCmd:
                 f"Job completed. Estimated time: {estimated_hours:.3f}h "
                 f"added to machine hours."
             )
+        except asyncio.CancelledError:
+            if driver.manual_execution_confirmation_required:
+                self._execution_confirmation_machine_ids.add(machine.id)
+            raise
         finally:
             cleanup_monitor()
 
@@ -343,9 +381,24 @@ class MachineCmd:
                         "Failed to retrieve artifact from handle."
                     )
 
+                if self.execution_confirmation_required(machine):
+                    raise ExecutionCompletionUnknownError(
+                        _(
+                            "The previous program may still be executing. "
+                            "Reconnect only after the controller is visibly "
+                            "idle."
+                        )
+                    )
+
                 await final_job_action(artifact, machine, on_progress)
 
+        except asyncio.CancelledError:
+            if machine.driver.manual_execution_confirmation_required:
+                self._execution_confirmation_machine_ids.add(machine.id)
+            raise
         except Exception as e:
+            if isinstance(e, ExecutionCompletionUnknownError):
+                self._execution_confirmation_machine_ids.add(machine.id)
             logger.exception(f"Failed to assemble or execute {job_name} job")
             self._editor.notification_requested.send(
                 self,

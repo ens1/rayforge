@@ -1,5 +1,6 @@
 import asyncio
 import json
+from contextlib import nullcontext
 from functools import partial
 from unittest.mock import MagicMock, PropertyMock
 
@@ -10,6 +11,10 @@ from raygeo.ops.axis import Axis
 
 from rayforge.core.config import ConfigManager
 from rayforge.machine.cmd import MachineCmd
+from rayforge.machine.driver.driver import (
+    DeviceConnectionError,
+    ExecutionCompletionUnknownError,
+)
 from rayforge.machine.driver.ruida.ruida_encoder import (
     RuidaEncoder,
     RuidaEncodingError,
@@ -244,6 +249,266 @@ class TestMachineCmdJobMonitoring:
         transferred_mock.assert_called_once_with(machine_cmd, machine=machine)
         assert machine_cmd.execution_completion_unknown is True
         assert machine_cmd._current_monitor is None
+
+    def test_driver_defaults_to_no_manual_execution_confirmation(
+        self, machine
+    ):
+        assert machine.driver.reports_device_status is True
+        assert machine.driver.manual_execution_confirmation_required is False
+
+    @pytest.mark.asyncio
+    async def test_confirmed_idle_reconnect_clears_unknown_after_success(
+        self, machine_cmd, machine, mocker
+    ):
+        machine_cmd._execution_confirmation_machine_ids.add(machine.id)
+        reconnect_mock = mocker.patch.object(
+            machine,
+            "reconnect",
+            new_callable=mocker.AsyncMock,
+        )
+        run_mock = mocker.patch.object(
+            machine.driver,
+            "run",
+            new_callable=mocker.AsyncMock,
+        )
+
+        await machine_cmd.reconnect_after_confirmed_idle(machine)
+
+        reconnect_mock.assert_awaited_once_with()
+        run_mock.assert_not_awaited()
+        assert machine_cmd.execution_completion_unknown is False
+
+    @pytest.mark.asyncio
+    async def test_failed_confirmed_idle_reconnect_retains_unknown(
+        self, machine_cmd, machine, mocker
+    ):
+        mocker.patch.object(
+            type(machine.driver),
+            "manual_execution_confirmation_required",
+            new_callable=PropertyMock,
+            return_value=True,
+        )
+        reconnect_mock = mocker.patch.object(
+            machine,
+            "reconnect",
+            new_callable=mocker.AsyncMock,
+            side_effect=DeviceConnectionError("reopen failed"),
+        )
+        run_mock = mocker.patch.object(
+            machine.driver,
+            "run",
+            new_callable=mocker.AsyncMock,
+        )
+
+        with pytest.raises(DeviceConnectionError, match="reopen failed"):
+            await machine_cmd.reconnect_after_confirmed_idle(machine)
+
+        reconnect_mock.assert_awaited_once_with()
+        run_mock.assert_not_awaited()
+        assert machine_cmd.execution_completion_unknown is True
+        assert machine_cmd.execution_confirmation_required(machine) is True
+
+    @pytest.mark.asyncio
+    async def test_confirmed_idle_reconnect_only_clears_target_machine(
+        self, machine_cmd, machine, lite_context, mocker
+    ):
+        other = Machine(lite_context)
+        lite_context.machine_mgr.add_machine(other)
+        machine_cmd._execution_confirmation_machine_ids.update(
+            (machine.id, other.id)
+        )
+        reconnect_mock = mocker.patch.object(
+            machine,
+            "reconnect",
+            new_callable=mocker.AsyncMock,
+        )
+
+        await machine_cmd.reconnect_after_confirmed_idle(machine)
+
+        reconnect_mock.assert_awaited_once_with()
+        assert machine_cmd.execution_confirmation_required(machine) is False
+        assert machine_cmd.execution_confirmation_required(other) is True
+        assert machine_cmd.execution_completion_unknown is True
+
+    @pytest.mark.asyncio
+    async def test_duplicate_confirmed_idle_reconnect_is_rejected(
+        self, machine_cmd, machine, mocker
+    ):
+        machine_cmd._execution_confirmation_machine_ids.add(machine.id)
+        reconnect_started = asyncio.Event()
+        reconnect_release = asyncio.Event()
+
+        async def reconnect():
+            reconnect_started.set()
+            await reconnect_release.wait()
+
+        reconnect_mock = mocker.patch.object(
+            machine,
+            "reconnect",
+            side_effect=reconnect,
+        )
+        first = asyncio.create_task(
+            machine_cmd.reconnect_after_confirmed_idle(machine)
+        )
+        await reconnect_started.wait()
+
+        with pytest.raises(DeviceConnectionError, match="already in progress"):
+            await machine_cmd.reconnect_after_confirmed_idle(machine)
+
+        assert machine_cmd.execution_confirmation_required(machine) is True
+        reconnect_release.set()
+        await first
+
+        reconnect_mock.assert_awaited_once_with()
+        assert machine_cmd.execution_confirmation_required(machine) is False
+
+    @pytest.mark.asyncio
+    async def test_machine_latch_blocks_rebuilt_driver_until_reconnect(
+        self, machine_cmd, machine, job_artifact, mocker
+    ):
+        pipeline = machine_cmd._editor.pipeline
+        handle = MagicMock()
+        mocker.patch.object(
+            pipeline,
+            "generate_job_artifact_async",
+            new_callable=mocker.AsyncMock,
+            return_value=handle,
+        )
+        mocker.patch.object(
+            pipeline.artifact_store,
+            "checkout_handle",
+            return_value=nullcontext(job_artifact),
+        )
+        action = mocker.AsyncMock()
+        machine_cmd._execution_confirmation_machine_ids.add(machine.id)
+
+        with pytest.raises(
+            ExecutionCompletionUnknownError,
+            match="may still be executing",
+        ):
+            await machine_cmd._start_job(machine, "send", action)
+
+        action.assert_not_awaited()
+        reconnect_mock = mocker.patch.object(
+            machine,
+            "reconnect",
+            new_callable=mocker.AsyncMock,
+        )
+        await machine_cmd.reconnect_after_confirmed_idle(machine)
+        await machine_cmd._start_job(machine, "send", action)
+
+        reconnect_mock.assert_awaited_once_with()
+        action.assert_awaited_once()
+
+    def test_confirmation_query_does_not_leak_between_machines(
+        self, machine_cmd, machine, lite_context
+    ):
+        other = Machine(lite_context)
+        lite_context.machine_mgr.add_machine(other)
+        machine_cmd._execution_confirmation_machine_ids.add(machine.id)
+
+        assert machine_cmd.execution_confirmation_required(machine) is True
+        assert machine_cmd.execution_confirmation_required(other) is False
+
+    @pytest.mark.asyncio
+    async def test_ambiguous_start_failure_sets_confirmation_latch(
+        self, machine_cmd, machine, job_artifact, mocker
+    ):
+        pipeline = machine_cmd._editor.pipeline
+        handle = MagicMock()
+        mocker.patch.object(
+            pipeline,
+            "generate_job_artifact_async",
+            new_callable=mocker.AsyncMock,
+            return_value=handle,
+        )
+        mocker.patch.object(
+            pipeline.artifact_store,
+            "checkout_handle",
+            return_value=nullcontext(job_artifact),
+        )
+        action = mocker.AsyncMock(
+            side_effect=ExecutionCompletionUnknownError("execution unknown")
+        )
+
+        with pytest.raises(
+            ExecutionCompletionUnknownError,
+            match="execution unknown",
+        ):
+            await machine_cmd._start_job(machine, "send", action)
+
+        action.assert_awaited_once()
+        assert machine_cmd.execution_completion_unknown is True
+
+    @pytest.mark.asyncio
+    async def test_ambiguous_cancellation_sets_confirmation_latch(
+        self, machine_cmd, machine, job_artifact, mocker
+    ):
+        pipeline = machine_cmd._editor.pipeline
+        handle = MagicMock()
+        mocker.patch.object(
+            pipeline,
+            "generate_job_artifact_async",
+            new_callable=mocker.AsyncMock,
+            return_value=handle,
+        )
+        mocker.patch.object(
+            pipeline.artifact_store,
+            "checkout_handle",
+            return_value=nullcontext(job_artifact),
+        )
+        mocker.patch.object(
+            type(machine.driver),
+            "manual_execution_confirmation_required",
+            new_callable=PropertyMock,
+            side_effect=(False, True),
+        )
+        action = mocker.AsyncMock(side_effect=asyncio.CancelledError)
+
+        with pytest.raises(asyncio.CancelledError):
+            await machine_cmd._start_job(machine, "send", action)
+
+        action.assert_awaited_once()
+        assert machine_cmd.execution_completion_unknown is True
+
+    @pytest.mark.asyncio
+    async def test_cancelled_transfer_uses_captured_driver_latch(
+        self, machine_cmd, machine, job_artifact, mocker
+    ):
+        old_driver = machine.driver
+        run_started = asyncio.Event()
+
+        async def run_until_cancelled(*args, **kwargs):
+            run_started.set()
+            await asyncio.Event().wait()
+
+        mocker.patch.object(
+            type(old_driver),
+            "manual_execution_confirmation_required",
+            new_callable=PropertyMock,
+            return_value=True,
+        )
+        mocker.patch.object(
+            old_driver,
+            "run",
+            side_effect=run_until_cancelled,
+        )
+        replacement = MagicMock()
+        replacement.manual_execution_confirmation_required = False
+
+        task = asyncio.create_task(
+            machine_cmd._run_send_action(job_artifact, machine, None)
+        )
+        await run_started.wait()
+        machine.controller.driver = replacement
+        task.cancel()
+        try:
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        finally:
+            machine.controller.driver = old_driver
+
+        assert machine_cmd.execution_confirmation_required(machine) is True
 
 
 class TestMachineCmdFrame:

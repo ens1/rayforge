@@ -477,6 +477,10 @@ class Machine:
         """Public method to disconnect the driver."""
         await self.controller.disconnect()
 
+    async def reconnect(self):
+        """Replace the active driver and open a fresh connection."""
+        await self.controller.reconnect()
+
     async def shutdown(self):
         """
         Gracefully shuts down the machine's active driver and resources.

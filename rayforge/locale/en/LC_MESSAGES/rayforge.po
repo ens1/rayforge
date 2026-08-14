@@ -8335,13 +8335,13 @@ msgstr ""
 msgid ""
 "The selected Ruida dynamic-power research profile has limited hardware "
 "evidence from three one-layer vector coupons on a Boss LS2040 at 100 mm/s. A "
-"coupon planned as 15%-10%-15% looked solid; one planned as 15%-5%-15% visibly "
-"marked only its first 30 mm. The latter payload omitted baseline restoration "
-"after its reduced span. A corrected 15%-5%-15% coupon with explicit "
-"restoration produced the operator-reported result 'a ~30mm line, a gap, "
-"and a ~30mm line.' This establishes only that exact restore subset, not "
-"calibrated power or zero output. The broad profile remains research-only "
-"and every other dynamic-power combination is unvalidated"
+"coupon planned as 15%-10%-15% looked solid; one planned as 15%-5%-15% "
+"visibly marked only its first 30 mm. The latter payload omitted baseline "
+"restoration after its reduced span. A corrected 15%-5%-15% coupon with "
+"explicit restoration produced the operator-reported result 'a ~30mm line, a "
+"gap, and a ~30mm line.' This establishes only that exact restore subset, not "
+"calibrated power or zero output. The broad profile remains research-only and "
+"every other dynamic-power combination is unvalidated"
 msgstr ""
 
 #: rayforge/machine/driver/ruida/ruida_encoder.py
@@ -8352,4 +8352,88 @@ msgstr ""
 
 #: rayforge/machine/driver/ruida/ruida_encoder.py
 msgid "Ruida TravelTo uses the controller-configured rapid rate"
+msgstr ""
+
+#: rayforge/machine/cmd.py
+msgid "A confirmed-idle reconnect is already in progress."
+msgstr ""
+
+#: rayforge/machine/cmd.py
+msgid ""
+"The previous program may still be executing. Reconnect only after the "
+"controller is visibly idle."
+msgstr ""
+
+#: rayforge/machine/driver/ruida/program_driver.py
+msgid "Could not close the cancelled Ruida connection."
+msgstr ""
+
+#: rayforge/machine/driver/ruida/program_driver.py
+#, python-brace-format
+msgid "Could not close the Ruida controller connection: {error}"
+msgstr ""
+
+#: rayforge/machine/driver/ruida/program_driver.py
+msgid "The Ruida controller connection is still open."
+msgstr ""
+
+#: rayforge/machine/driver/ruida/program_driver.py
+msgid "The Ruida controller connection did not close."
+msgstr ""
+
+#: rayforge/machine/models/controller.py
+msgid ""
+"Machine configuration changed during reconnect. Reconnect again after "
+"confirming the controller is visibly idle."
+msgstr ""
+
+#: rayforge/machine/models/controller.py
+msgid "No machine driver is configured."
+msgstr ""
+
+#: rayforge/machine/models/controller.py
+msgid "Driver setup failed."
+msgstr ""
+
+#: rayforge/ui_gtk/mainwindow.py
+msgid "Confirm that the controller is idle before reconnecting"
+msgstr ""
+
+#: rayforge/ui_gtk/mainwindow.py
+msgid "Confirm the Controller Is Idle"
+msgstr ""
+
+#: rayforge/ui_gtk/mainwindow.py
+msgid ""
+"Rayforge cannot verify that the previous program has finished. Look at the "
+"controller and machine. Continue only when the controller is visibly idle "
+"and all motion and laser emission have stopped. Reconnecting does not stop a "
+"running program and will not resend the job."
+msgstr ""
+
+#: rayforge/ui_gtk/mainwindow.py
+msgid "Controller Is Visibly Idle — Reconnect"
+msgstr ""
+
+#: rayforge/ui_gtk/mainwindow.py
+msgid "The active machine changed before reconnecting."
+msgstr ""
+
+#: rayforge/ui_gtk/mainwindow.py
+msgid "Reconnecting to controller…"
+msgstr ""
+
+#: rayforge/ui_gtk/mainwindow.py
+msgid ""
+"Reconnect canceled. Confirm the controller is idle before trying Send or "
+"Frame again."
+msgstr ""
+
+#: rayforge/ui_gtk/mainwindow.py
+#, python-brace-format
+msgid "Reconnect failed: {error}"
+msgstr ""
+
+#: rayforge/ui_gtk/mainwindow.py
+msgid "Controller reconnected. Click Send or Frame again when ready."
 msgstr ""

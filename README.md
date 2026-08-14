@@ -114,7 +114,11 @@ Rayforge compiles complete Ruida `.rd` programs through
 [ruida-re](https://github.com/ens1/ruida-re) and transfers them over USB
 serial or UDP. The conservative, hardware-observed `proven` profile remains
 the default. Advanced behavior must be enabled with an explicit research
-profile. Narrow planned-path coupons have been run on a Boss LS2040 over USB
+profile. Because these transports do not report execution completion, the
+next Send or Frame action requires the operator to confirm that the controller
+is visibly idle. Rayforge then opens a fresh connection without resending the
+previous job; the operator starts the next action separately. Narrow
+planned-path coupons have been run on a Boss LS2040 over USB
 serial. A direct 10% coupon produced the expected motion without visible
 marks, while direct and Rayforge-generated 15% single-section coupons produced
 visible lines. A separate Rayforge 15% cross-hatch coupon executed two

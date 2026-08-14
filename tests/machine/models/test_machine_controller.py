@@ -13,6 +13,7 @@ import pytest
 
 from rayforge.machine.models.controller import MachineController
 from rayforge.machine.models.machine import Machine
+from rayforge.machine.transport import TransportStatus
 from rayforge.shared.tasker import task_mgr
 
 
@@ -49,3 +50,48 @@ class TestMachineController:
         assert hasattr(controller, "job_finished")
         assert hasattr(controller, "command_status_changed")
         assert hasattr(controller, "wcs_updated")
+
+    @pytest.mark.asyncio
+    async def test_connecting_driver_is_not_started_twice(
+        self, machine, mocker
+    ):
+        controller = machine.controller
+        driver = controller.driver
+
+        async def start_background_connection():
+            driver.connection_status_changed.send(
+                driver,
+                status=TransportStatus.CONNECTING,
+                message=None,
+            )
+
+        connect_mock = mocker.patch.object(
+            driver,
+            "connect",
+            side_effect=start_background_connection,
+        )
+
+        await controller.connect()
+        await controller.connect()
+
+        connect_mock.assert_awaited_once_with()
+
+    def test_driver_config_update_does_not_trigger_rebuild(
+        self, sync_machine, mocker
+    ):
+        controller = sync_machine.controller
+        driver = controller.driver
+        driver.config = {"rx_buffer_size": 256}
+        add_coroutine = mocker.patch.object(task_mgr, "add_coroutine")
+
+        driver.config_changed.send(driver)
+        sync_machine.changed.send(sync_machine)
+
+        assert sync_machine.driver_config == {"rx_buffer_size": 256}
+        assert controller._last_driver_config == {"rx_buffer_size": 256}
+        assert controller._active_driver_config == {"rx_buffer_size": 256}
+        rebuild_key = (sync_machine.id, "rebuild-driver-on-change")
+        assert all(
+            call.kwargs.get("key") != rebuild_key
+            for call in add_coroutine.call_args_list
+        )

@@ -20,7 +20,10 @@ from ..core.undo import Command, HistoryManager
 from ..core.workpiece import WorkPiece
 from ..doceditor.editor import DocEditor
 from ..machine.cmd import MachineCmd
-from ..machine.driver.driver import DeviceState, DeviceStatus
+from ..machine.driver.driver import (
+    DeviceState,
+    DeviceStatus,
+)
 from ..machine.driver.dummy import NoDeviceDriver
 from ..machine.models.machine import Machine
 from ..machine.sanity import CheckMode, SanityChecker
@@ -1637,6 +1640,14 @@ class MainWindow(Adw.ApplicationWindow):
             state = active_machine.device_state
             active_driver = active_machine.driver
             is_dummy = isinstance(active_driver, NoDeviceDriver)
+            confirmation_required = (
+                self._manual_execution_confirmation_required(active_machine)
+            )
+            can_prompt_for_confirmation = (
+                confirmation_required
+                and not task_mgr.has_tasks()
+                and not self.machine_cmd.is_job_running
+            )
 
             can_export = (
                 doc.has_result()
@@ -1675,8 +1686,9 @@ class MainWindow(Adw.ApplicationWindow):
 
             # A job/task is running if the machine is not idle or a UI task is
             # active.
-            machine_processing = (
+            machine_processing = confirmation_required or (
                 conn_status == TransportStatus.CONNECTED
+                and active_driver.reports_device_status
                 and device_status != DeviceStatus.IDLE
             )
 
@@ -1695,8 +1707,16 @@ class MainWindow(Adw.ApplicationWindow):
                 and doc.has_result()
                 and not is_job_or_task_active
             )
+            can_frame = can_frame or can_prompt_for_confirmation
             am.get_action("machine-frame").set_enabled(can_frame)
-            if not active_machine.can_frame():
+            if confirmation_required:
+                self.toolbar.frame_button.set_tooltip_text(
+                    _(
+                        "Confirm that the controller is idle before "
+                        "reconnecting"
+                    )
+                )
+            elif not active_machine.can_frame():
                 self.toolbar.frame_button.set_tooltip_text(
                     _("Configure frame power to enable")
                 )
@@ -1713,8 +1733,16 @@ class MainWindow(Adw.ApplicationWindow):
                 and not is_job_or_task_active
                 and not self.doc_editor.pipeline.is_data_stale
             )
+            send_sensitive = send_sensitive or can_prompt_for_confirmation
             am.get_action("machine-send").set_enabled(send_sensitive)
-            if self.doc_editor.pipeline.is_data_stale:
+            if confirmation_required:
+                self.toolbar.send_button.set_tooltip_text(
+                    _(
+                        "Confirm that the controller is idle before "
+                        "reconnecting"
+                    )
+                )
+            elif self.doc_editor.pipeline.is_data_stale:
                 self.toolbar.send_button.set_tooltip_text(
                     _(
                         "Pipeline needs recalculation before sending. "
@@ -2098,9 +2126,116 @@ class MainWindow(Adw.ApplicationWindow):
         # Add a callback to handle the result (or exception) of the task
         fut.add_done_callback(self._on_job_future_done)
 
+    def _manual_execution_confirmation_required(
+        self, machine: Machine
+    ) -> bool:
+        return self.machine_cmd.execution_confirmation_required(machine)
+
+    def _confirm_idle_before_next_job(self, machine: Machine) -> bool:
+        if not self._manual_execution_confirmation_required(machine):
+            return False
+
+        driver = machine.driver
+        dialog = Adw.MessageDialog(
+            transient_for=self,
+            modal=True,
+            heading=_("Confirm the Controller Is Idle"),
+            body=_(
+                "Rayforge cannot verify that the previous program has "
+                "finished. Look at the controller and machine. Continue "
+                "only when the controller is visibly idle and all motion "
+                "and laser emission have stopped. Reconnecting does not "
+                "stop a running program and will not resend the job."
+            ),
+        )
+        dialog.add_response("cancel", _("Cancel"))
+        dialog.add_response(
+            "reconnect", _("Controller Is Visibly Idle — Reconnect")
+        )
+        dialog.set_default_response("cancel")
+        dialog.set_close_response("cancel")
+        dialog.set_response_appearance(
+            "reconnect", Adw.ResponseAppearance.DESTRUCTIVE
+        )
+
+        def _on_response(response_dialog, response_id):
+            response_dialog.destroy()
+            if response_id != "reconnect":
+                return
+            active_machine = get_context().config.machine
+            if active_machine is not machine or machine.driver is not driver:
+                return
+            if task_mgr.has_tasks():
+                return
+            if not self._manual_execution_confirmation_required(machine):
+                return
+            self._reconnect_after_confirmed_idle(machine)
+
+        dialog.connect("response", _on_response)
+        dialog.present()
+        return True
+
+    def _reconnect_after_confirmed_idle(self, machine: Machine):
+        driver = machine.driver
+
+        async def _reconnect(ctx):
+            active_machine = get_context().config.machine
+            if active_machine is not machine or machine.driver is not driver:
+                raise RuntimeError(
+                    _("The active machine changed before reconnecting.")
+                )
+            ctx.set_message(_("Reconnecting to controller…"))
+            await self.machine_cmd.reconnect_after_confirmed_idle(machine)
+
+        task_mgr.add_coroutine(
+            _reconnect,
+            key=(machine.id, "reconnect-after-confirmed-idle"),
+            when_done=self._on_confirmed_idle_reconnect_done,
+        )
+
+    def _on_confirmed_idle_reconnect_done(self, task):
+        def _update():
+            if task.get_status() == "canceled":
+                self._on_editor_notification(
+                    self,
+                    message=_(
+                        "Reconnect canceled. Confirm the controller is idle "
+                        "before trying Send or Frame again."
+                    ),
+                    persistent=True,
+                )
+            else:
+                try:
+                    task.result()
+                except Exception as error:
+                    logger.exception(
+                        "Failed to reconnect after confirmed idle"
+                    )
+                    self._on_editor_notification(
+                        self,
+                        message=_("Reconnect failed: {error}").format(
+                            error=error
+                        ),
+                        persistent=True,
+                    )
+                else:
+                    self._on_editor_notification(
+                        self,
+                        message=_(
+                            "Controller reconnected. Click Send or Frame "
+                            "again when ready."
+                        ),
+                    )
+            self._update_actions_and_ui()
+
+        task_mgr.schedule_on_main_thread(_update)
+
     def on_frame_clicked(self, action, param):
         config = get_context().config
-        if not config.machine:
+        machine = config.machine
+        if not machine:
+            return
+        if self._confirm_idle_before_next_job(machine):
             return
 
         # Disable focus mode when framing
@@ -2111,7 +2246,7 @@ class MainWindow(Adw.ApplicationWindow):
 
         # Get the coroutine object for the framing job
         job_coro = self.machine_cmd.frame_job(
-            config.machine, on_progress=self._on_job_progress_updated
+            machine, on_progress=self._on_job_progress_updated
         )
         # Run the job using the helper
         self._run_machine_job(job_coro)
@@ -2120,6 +2255,8 @@ class MainWindow(Adw.ApplicationWindow):
         config = get_context().config
         machine = config.machine
         if not machine:
+            return
+        if self._confirm_idle_before_next_job(machine):
             return
 
         def _proceed():

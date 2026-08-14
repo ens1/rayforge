@@ -44,6 +44,10 @@ class DeviceConnectionError(Exception):
     """Custom exception for failures to communicate with a device."""
 
 
+class ExecutionCompletionUnknownError(DeviceConnectionError):
+    """Raised when a submitted program may still be executing."""
+
+
 class ResourceBusyError(DeviceConnectionError):
     """
     Raised when attempting to connect to a resource (e.g. serial port)
@@ -230,6 +234,7 @@ class Driver(ABC):
     # Drivers that send files via the network may not be able to
     # report granular progress updates during the execution of a job.
     reports_granular_progress: bool = False
+    reports_device_status: bool = True
     confirms_execution_completion: bool = True
     uses_gcode: bool = True
     accepts_arc_ops: bool = True
@@ -268,6 +273,11 @@ class Driver(ABC):
         Drivers may override this to provide driver-specific WCS names.
         """
         return ["G54", "G55", "G56", "G57", "G58", "G59"]
+
+    @property
+    def manual_execution_confirmation_required(self) -> bool:
+        """Whether another job requires manual execution confirmation."""
+        return False
 
     def __init__(self, context: RayforgeContext, machine: "Machine"):
         self._context = context

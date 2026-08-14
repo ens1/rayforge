@@ -10,6 +10,7 @@ from rayforge.machine.driver import drivers, get_driver_cls
 from rayforge.machine.driver.driver import (
     DeviceConnectionError,
     DeviceStatus,
+    ExecutionCompletionUnknownError,
 )
 from rayforge.machine.driver.ruida import program_driver
 from rayforge.machine.driver.ruida.program_driver import RuidaProgramDriver
@@ -20,6 +21,7 @@ from rayforge.machine.driver.ruida.ruida_udp_program_driver import (
     RuidaUdpProgramDriver,
 )
 from rayforge.machine.models.laser import Laser
+from rayforge.machine.models.machine import Machine
 from rayforge.machine.transport import TransportStatus
 from rayforge.pipeline.encoder.base import EncodedOutput, MachineCodeOpMap
 
@@ -96,10 +98,17 @@ class FakeControllerClient:
         self.is_open = False
         self.is_ready = False
         self.open_probes = []
+        self.close_calls = 0
         self.open_error: Exception | None = None
+        self.close_error: Exception | None = None
+        self.close_before_error = False
         self.send_error: Exception | None = None
         self.sent_programs = []
         self.events = []
+        self.open_started: threading.Event | None = None
+        self.open_release: threading.Event | None = None
+        self.close_started: threading.Event | None = None
+        self.close_release: threading.Event | None = None
         self.send_started: threading.Event | None = None
         self.send_release: threading.Event | None = None
         self.receipt = SimpleNamespace(
@@ -110,12 +119,26 @@ class FakeControllerClient:
 
     def open(self, *, probe):
         self.open_probes.append(probe)
+        if self.open_started is not None:
+            self.open_started.set()
+        if self.open_release is not None:
+            self.open_release.wait()
         if self.open_error is not None:
             raise self.open_error
         self.is_open = True
         self.is_ready = True
 
     def close(self):
+        self.close_calls += 1
+        if self.close_started is not None:
+            self.close_started.set()
+        if self.close_release is not None:
+            self.close_release.wait()
+        if self.close_error is not None:
+            if self.close_before_error:
+                self.is_open = False
+                self.is_ready = False
+            raise self.close_error
         self.is_open = False
         self.is_ready = False
 
@@ -135,12 +158,22 @@ class FakeControllerClient:
 @pytest.fixture
 def fake_api(monkeypatch):
     codec = FakeCodec()
+    clients = []
     api = SimpleNamespace(
-        ControllerClient=FakeControllerClient,
         RuidaCodec=lambda *, context: codec,
         SerialTransport=FakeSerialTransport,
         UdpTransport=FakeUdpTransport,
+        clients=clients,
+        next_open_error=None,
     )
+
+    def create_client(transport):
+        client = FakeControllerClient(transport)
+        client.open_error = api.next_open_error
+        clients.append(client)
+        return client
+
+    api.ControllerClient = create_client
     monkeypatch.setattr(program_driver, "_load_ruida_re", lambda: api)
     return api, codec
 
@@ -174,6 +207,11 @@ def client_for(driver: RuidaProgramDriver) -> FakeControllerClient:
     client = driver._client
     assert isinstance(client, FakeControllerClient)
     return client
+
+
+async def wait_for_tasks(task_mgr):
+    settled = await asyncio.to_thread(task_mgr.wait_until_settled, 2000)
+    assert settled
 
 
 def test_program_drivers_are_registered():
@@ -278,6 +316,581 @@ async def test_serial_connects_without_probe(fake_api, driver_objects):
 
 
 @pytest.mark.asyncio
+async def test_execution_latch_clears_only_after_successful_reopen(
+    fake_api, driver_objects
+):
+    context, machine = driver_objects
+    driver = RuidaSerialDriver(context, machine)
+    setup_args = {"port": "/dev/cu.ruida", "baudrate": 115200}
+    driver.setup(**setup_args)
+    await driver.connect()
+    assert driver.reports_device_status is False
+    assert driver.manual_execution_confirmation_required is False
+
+    await driver.run(make_output(), MagicMock(), MagicMock())
+    assert driver._execution_unconfirmed is True
+    assert driver.manual_execution_confirmation_required is True
+
+    await driver.cleanup()
+    assert driver._execution_unconfirmed is True
+    assert driver.manual_execution_confirmation_required is True
+
+    driver.setup(**setup_args)
+    client = client_for(driver)
+    client.open_error = OSError("open failed")
+
+    with pytest.raises(DeviceConnectionError, match="open failed"):
+        await driver.connect()
+
+    assert driver._execution_unconfirmed is True
+    assert driver.manual_execution_confirmation_required is True
+    assert client.sent_programs == []
+
+    client.open_error = None
+    await driver.connect()
+
+    assert driver._execution_unconfirmed is False
+    assert driver.manual_execution_confirmation_required is False
+    assert client.sent_programs == []
+    await driver.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_cancelled_blocking_open_closes_after_worker_settles(
+    fake_api, driver_objects
+):
+    context, machine = driver_objects
+    driver = RuidaSerialDriver(context, machine)
+    driver.setup(port="/dev/cu.ruida", baudrate=115200)
+    driver._execution_unconfirmed = True
+    client = client_for(driver)
+    open_started = threading.Event()
+    open_release = threading.Event()
+    client.open_started = open_started
+    client.open_release = open_release
+
+    task = asyncio.create_task(driver.connect())
+    assert await asyncio.to_thread(open_started.wait, 1.0)
+    task.cancel()
+    await asyncio.sleep(0)
+    assert not task.done()
+
+    open_release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert client.close_calls == 1
+    assert client.is_open is False
+    assert client.is_ready is False
+    assert client.sent_programs == []
+    assert driver._client is client
+    assert driver.manual_execution_confirmation_required is True
+    assert driver.did_setup is True
+    await driver.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_cancelled_open_preserves_handle_when_close_fails(
+    fake_api, driver_objects
+):
+    context, machine = driver_objects
+    driver = RuidaSerialDriver(context, machine)
+    driver.setup(port="/dev/cu.ruida", baudrate=115200)
+    driver._execution_unconfirmed = True
+    client = client_for(driver)
+    open_started = threading.Event()
+    open_release = threading.Event()
+    client.open_started = open_started
+    client.open_release = open_release
+    client.close_error = RuntimeError("close failed")
+
+    task = asyncio.create_task(driver.connect())
+    assert await asyncio.to_thread(open_started.wait, 1.0)
+    task.cancel()
+    open_release.set()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert client.close_calls == 1
+    assert client.is_open is True
+    assert client.is_ready is True
+    assert client.sent_programs == []
+    assert driver._client is client
+    assert driver.manual_execution_confirmation_required is True
+    assert driver.did_setup is True
+
+    client.close_error = None
+    await driver.cleanup()
+    assert client.close_calls == 2
+    assert client.is_open is False
+    assert driver._client is None
+
+
+@pytest.mark.asyncio
+async def test_cancelled_blocking_close_finalizes_after_worker_settles(
+    fake_api, driver_objects
+):
+    context, machine = driver_objects
+    driver = RuidaSerialDriver(context, machine)
+    driver.setup(port="/dev/cu.ruida", baudrate=115200)
+    await driver.connect()
+    driver._execution_unconfirmed = True
+    client = client_for(driver)
+    close_started = threading.Event()
+    close_release = threading.Event()
+    client.close_started = close_started
+    client.close_release = close_release
+
+    task = asyncio.create_task(driver.cleanup())
+    assert await asyncio.to_thread(close_started.wait, 1.0)
+    task.cancel()
+    await asyncio.sleep(0)
+    assert not task.done()
+
+    close_release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert client.close_calls == 1
+    assert client.is_open is False
+    assert client.is_ready is False
+    assert client.sent_programs == []
+    assert driver._client is None
+    assert driver._transport is None
+    assert driver.resource_uri is None
+    assert driver.manual_execution_confirmation_required is True
+    assert driver.did_setup is False
+
+
+@pytest.mark.asyncio
+async def test_cancelled_close_preserves_cancellation_after_close_error(
+    fake_api, driver_objects
+):
+    context, machine = driver_objects
+    driver = RuidaSerialDriver(context, machine)
+    driver.setup(port="/dev/cu.ruida", baudrate=115200)
+    await driver.connect()
+    driver._execution_unconfirmed = True
+    client = client_for(driver)
+    close_started = threading.Event()
+    close_release = threading.Event()
+    client.close_started = close_started
+    client.close_release = close_release
+    client.close_before_error = True
+    client.close_error = RuntimeError("closed with error")
+
+    task = asyncio.create_task(driver.cleanup())
+    assert await asyncio.to_thread(close_started.wait, 1.0)
+    task.cancel()
+    close_release.set()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert client.close_calls == 1
+    assert client.is_open is False
+    assert client.is_ready is False
+    assert client.sent_programs == []
+    assert driver._client is None
+    assert driver._transport is None
+    assert driver.resource_uri is None
+    assert driver.manual_execution_confirmation_required is True
+    assert driver.did_setup is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("auto_connect", (False, True))
+async def test_machine_reconnect_opens_fresh_session_without_resending(
+    fake_api,
+    lite_context,
+    task_mgr,
+    auto_connect,
+):
+    api, codec = fake_api
+    machine = Machine(lite_context)
+    lite_context.machine_mgr.add_machine(machine)
+    controller = machine.controller
+    machine.driver_name = "RuidaSerialDriver"
+    machine.driver_args = {
+        "port": "/dev/cu.ruida",
+        "baudrate": 115200,
+    }
+    machine.auto_connect = auto_connect
+
+    try:
+        await machine.reconnect()
+        await wait_for_tasks(task_mgr)
+        old_driver = machine.driver
+        assert isinstance(old_driver, RuidaSerialDriver)
+        old_client = client_for(old_driver)
+
+        await old_driver.run(make_output(), MagicMock(), MagicMock())
+        with pytest.raises(ExecutionCompletionUnknownError):
+            await old_driver.run(make_output(), MagicMock(), MagicMock())
+
+        await machine.reconnect()
+        await wait_for_tasks(task_mgr)
+        new_driver = machine.driver
+        assert isinstance(new_driver, RuidaSerialDriver)
+        assert new_driver is not old_driver
+        new_client = client_for(new_driver)
+
+        assert len(api.clients) == 2
+        assert old_client.close_calls == 1
+        assert new_client.open_probes == [False]
+        assert old_client.sent_programs == [codec.program]
+        assert new_client.sent_programs == []
+        assert new_driver.manual_execution_confirmation_required is False
+
+        await new_driver.run(make_output(), MagicMock(), MagicMock())
+        assert new_client.sent_programs == [codec.program]
+    finally:
+        await controller.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_failed_machine_reconnect_does_not_send_or_replay_job(
+    fake_api,
+    lite_context,
+    task_mgr,
+):
+    api, codec = fake_api
+    machine = Machine(lite_context)
+    lite_context.machine_mgr.add_machine(machine)
+    controller = machine.controller
+    machine.driver_name = "RuidaSerialDriver"
+    machine.driver_args = {
+        "port": "/dev/cu.ruida",
+        "baudrate": 115200,
+    }
+    machine.auto_connect = False
+
+    try:
+        await machine.reconnect()
+        await wait_for_tasks(task_mgr)
+        old_driver = machine.driver
+        assert isinstance(old_driver, RuidaSerialDriver)
+        old_client = client_for(old_driver)
+        await old_driver.run(make_output(), MagicMock(), MagicMock())
+
+        api.next_open_error = OSError("reopen failed")
+        with pytest.raises(DeviceConnectionError, match="reopen failed"):
+            await machine.reconnect()
+        await wait_for_tasks(task_mgr)
+
+        failed_driver = machine.driver
+        assert isinstance(failed_driver, RuidaSerialDriver)
+        failed_client = client_for(failed_driver)
+        assert old_client.close_calls == 1
+        assert old_client.sent_programs == [codec.program]
+        assert failed_client.open_probes == [False]
+        assert failed_client.sent_programs == []
+
+        with pytest.raises(DeviceConnectionError, match="not connected"):
+            await failed_driver.run(make_output(), MagicMock(), MagicMock())
+        assert failed_client.sent_programs == []
+    finally:
+        await controller.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_machine_reconnect_preserves_old_driver_when_close_fails(
+    fake_api,
+    lite_context,
+    task_mgr,
+):
+    api, codec = fake_api
+    machine = Machine(lite_context)
+    lite_context.machine_mgr.add_machine(machine)
+    controller = machine.controller
+    machine.driver_name = "RuidaSerialDriver"
+    machine.driver_args = {
+        "port": "/dev/cu.ruida",
+        "baudrate": 115200,
+    }
+    machine.auto_connect = False
+
+    try:
+        await machine.reconnect()
+        await wait_for_tasks(task_mgr)
+        old_driver = machine.driver
+        assert isinstance(old_driver, RuidaSerialDriver)
+        old_client = client_for(old_driver)
+        await old_driver.run(make_output(), MagicMock(), MagicMock())
+        old_client.close_error = OSError("port close failed")
+
+        with pytest.raises(DeviceConnectionError, match="port close failed"):
+            await machine.reconnect()
+
+        candidate_client = api.clients[1]
+        assert machine.driver is old_driver
+        assert old_driver._client is old_client
+        assert old_driver.resource_uri == "serial:///dev/cu.ruida"
+        assert old_driver.manual_execution_confirmation_required is True
+        assert old_client.is_open is True
+        assert old_client.is_ready is True
+        assert old_client.close_calls == 1
+        assert old_client.sent_programs == [codec.program]
+        assert candidate_client.open_probes == []
+        assert candidate_client.sent_programs == []
+
+        old_client.close_error = None
+        await machine.reconnect()
+        await wait_for_tasks(task_mgr)
+
+        new_driver = machine.driver
+        assert isinstance(new_driver, RuidaSerialDriver)
+        assert new_driver is not old_driver
+        new_client = client_for(new_driver)
+        assert old_client.close_calls == 2
+        assert new_client.open_probes == [False]
+        assert new_client.sent_programs == []
+    finally:
+        await controller.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_overlapping_rebuild_skips_stale_driver_open(
+    fake_api,
+    lite_context,
+    task_mgr,
+):
+    api, _ = fake_api
+    machine = Machine(lite_context)
+    lite_context.machine_mgr.add_machine(machine)
+    controller = machine.controller
+    machine.driver_name = "RuidaSerialDriver"
+    machine.driver_args = {
+        "port": "/dev/cu.ruida-a",
+        "baudrate": 115200,
+    }
+    machine.auto_connect = False
+
+    try:
+        await machine.reconnect()
+        await wait_for_tasks(task_mgr)
+        old_driver = machine.driver
+        assert isinstance(old_driver, RuidaSerialDriver)
+        old_client = client_for(old_driver)
+        close_started = threading.Event()
+        close_release = threading.Event()
+        old_client.close_started = close_started
+        old_client.close_release = close_release
+
+        first = asyncio.create_task(machine.reconnect())
+        assert await asyncio.to_thread(close_started.wait, 1.0)
+        machine.driver_args = {
+            "port": "/dev/cu.ruida-b",
+            "baudrate": 115200,
+        }
+        second = asyncio.create_task(machine.reconnect())
+        await asyncio.sleep(0)
+        assert not second.done()
+
+        close_release.set()
+        with pytest.raises(
+            DeviceConnectionError,
+            match="configuration changed",
+        ):
+            await first
+        await second
+        await wait_for_tasks(task_mgr)
+
+        stale_client = api.clients[1]
+        current_driver = machine.driver
+        assert isinstance(current_driver, RuidaSerialDriver)
+        current_client = client_for(current_driver)
+        assert old_client.close_calls == 1
+        assert stale_client.open_probes == []
+        assert stale_client.close_calls == 0
+        assert current_client.open_probes == [False]
+        assert current_client.close_calls == 0
+        assert all(client.sent_programs == [] for client in api.clients)
+        transport = current_driver._transport
+        assert isinstance(transport, FakeSerialTransport)
+        assert transport.device == "/dev/cu.ruida-b"
+        assert machine.driver_args["port"] == "/dev/cu.ruida-b"
+    finally:
+        await controller.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_config_change_rebuilds_after_stale_cleanup(
+    fake_api,
+    lite_context,
+    mocker,
+    task_mgr,
+):
+    api, _ = fake_api
+    machine = Machine(lite_context)
+    lite_context.machine_mgr.add_machine(machine)
+    controller = machine.controller
+    machine.driver_name = "RuidaSerialDriver"
+    machine.driver_args = {
+        "port": "/dev/cu.ruida",
+        "baudrate": 115200,
+    }
+    machine.driver_config = {"firmware_version": "a"}
+    machine.auto_connect = False
+    close_release = threading.Event()
+    lifecycle_tasks: list[asyncio.Task] = []
+
+    try:
+        await machine.reconnect()
+        await wait_for_tasks(task_mgr)
+        old_driver = machine.driver
+        assert isinstance(old_driver, RuidaSerialDriver)
+        old_client = client_for(old_driver)
+        close_started = threading.Event()
+        old_client.close_started = close_started
+        old_client.close_release = close_release
+        add_coroutine = mocker.patch.object(task_mgr, "add_coroutine")
+
+        first = asyncio.create_task(controller.rebuild_driver(connect=False))
+        lifecycle_tasks.append(first)
+        assert await asyncio.to_thread(close_started.wait, 1.0)
+        latest_config = {"firmware_version": "b"}
+        machine.driver_config = latest_config
+        machine.changed.send(machine)
+        rebuild_key = (machine.id, "rebuild-driver-on-change")
+        rebuild_calls = [
+            call
+            for call in add_coroutine.call_args_list
+            if call.kwargs.get("key") == rebuild_key
+        ]
+        assert len(rebuild_calls) == 1
+        scheduled_rebuild = rebuild_calls[0].args[0]
+        second = asyncio.create_task(scheduled_rebuild())
+        lifecycle_tasks.append(second)
+        close_release.set()
+
+        await asyncio.gather(first, second)
+
+        stale_client = api.clients[1]
+        current_driver = machine.driver
+        assert isinstance(current_driver, RuidaSerialDriver)
+        current_client = client_for(current_driver)
+        assert old_client.close_calls == 1
+        assert stale_client.open_probes == []
+        assert stale_client.close_calls == 0
+        assert current_client.open_probes == []
+        assert current_driver.config == latest_config
+        assert controller._active_driver_config == latest_config
+        assert all(client.sent_programs == [] for client in api.clients)
+    finally:
+        close_release.set()
+        for task in lifecycle_tasks:
+            if not task.done():
+                task.cancel()
+        if lifecycle_tasks:
+            await asyncio.gather(*lifecycle_tasks, return_exceptions=True)
+        await controller.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_overlapping_same_config_reconnects_coalesce(
+    fake_api,
+    lite_context,
+    task_mgr,
+):
+    api, _ = fake_api
+    machine = Machine(lite_context)
+    lite_context.machine_mgr.add_machine(machine)
+    controller = machine.controller
+    machine.driver_name = "RuidaSerialDriver"
+    machine.driver_args = {
+        "port": "/dev/cu.ruida",
+        "baudrate": 115200,
+    }
+    machine.auto_connect = False
+
+    try:
+        await machine.reconnect()
+        await wait_for_tasks(task_mgr)
+        old_driver = machine.driver
+        assert isinstance(old_driver, RuidaSerialDriver)
+        old_client = client_for(old_driver)
+        close_started = threading.Event()
+        close_release = threading.Event()
+        old_client.close_started = close_started
+        old_client.close_release = close_release
+
+        first = asyncio.create_task(machine.reconnect())
+        assert await asyncio.to_thread(close_started.wait, 1.0)
+        second = asyncio.create_task(machine.reconnect())
+        await asyncio.sleep(0)
+        assert not second.done()
+
+        close_release.set()
+        await asyncio.gather(first, second)
+        await wait_for_tasks(task_mgr)
+
+        assert len(api.clients) == 2
+        assert old_client.close_calls == 1
+        new_driver = machine.driver
+        assert isinstance(new_driver, RuidaSerialDriver)
+        new_client = client_for(new_driver)
+        assert new_client.open_probes == [False]
+        assert new_client.sent_programs == []
+    finally:
+        await controller.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_disconnect_and_reconnect_share_lifecycle_lock(
+    fake_api,
+    lite_context,
+    task_mgr,
+):
+    api, _ = fake_api
+    machine = Machine(lite_context)
+    lite_context.machine_mgr.add_machine(machine)
+    controller = machine.controller
+    machine.driver_name = "RuidaSerialDriver"
+    machine.driver_args = {
+        "port": "/dev/cu.ruida",
+        "baudrate": 115200,
+    }
+    machine.auto_connect = False
+
+    try:
+        await machine.reconnect()
+        await wait_for_tasks(task_mgr)
+        old_driver = machine.driver
+        assert isinstance(old_driver, RuidaSerialDriver)
+        old_client = client_for(old_driver)
+        close_started = threading.Event()
+        close_release = threading.Event()
+        old_client.close_started = close_started
+        old_client.close_release = close_release
+
+        disconnect = asyncio.create_task(machine.disconnect())
+        assert await asyncio.to_thread(close_started.wait, 1.0)
+        reconnect = asyncio.create_task(machine.reconnect())
+        await asyncio.sleep(0)
+        assert not reconnect.done()
+
+        close_release.set()
+        await asyncio.gather(disconnect, reconnect)
+        await wait_for_tasks(task_mgr)
+
+        assert len(api.clients) == 3
+        assert old_client.close_calls == 1
+        disconnected_client = api.clients[1]
+        current_driver = machine.driver
+        assert isinstance(current_driver, RuidaSerialDriver)
+        current_client = client_for(current_driver)
+        assert disconnected_client.open_probes == []
+        assert disconnected_client.close_calls == 0
+        assert current_client.open_probes == [False]
+        assert current_client.close_calls == 0
+        assert all(client.sent_programs == [] for client in api.clients)
+    finally:
+        await controller.shutdown()
+
+
+@pytest.mark.asyncio
 async def test_udp_connects_with_probe(fake_api, driver_objects):
     context, machine = driver_objects
     driver = RuidaUdpProgramDriver(context, machine)
@@ -324,6 +937,7 @@ async def test_run_validates_and_transfers_before_callbacks(
     assert codec.decode_calls == [(b"complete-rd", "rd")]
     assert codec.encode_calls == [(codec.program, "rd", "recompute")]
     assert client.sent_programs == [codec.program]
+    assert driver.manual_execution_confirmation_required is True
     assert events == [
         "send-started",
         "send-complete",
@@ -332,7 +946,10 @@ async def test_run_validates_and_transfers_before_callbacks(
     ]
     assert driver.confirms_execution_completion is False
 
-    with pytest.raises(DeviceConnectionError, match="may still be executing"):
+    with pytest.raises(
+        ExecutionCompletionUnknownError,
+        match="may still be executing",
+    ):
         await driver.run(output, MagicMock(), MagicMock())
 
     await driver.cleanup()
@@ -532,7 +1149,10 @@ async def test_transfer_failure_has_no_success_signals(
         weak=False,
     )
 
-    with pytest.raises(DeviceConnectionError, match="transfer failed"):
+    with pytest.raises(
+        ExecutionCompletionUnknownError,
+        match="transfer failed",
+    ):
         await driver.run(
             make_output(),
             MagicMock(),
@@ -543,8 +1163,12 @@ async def test_transfer_failure_has_no_success_signals(
     assert callback_calls == []
     assert finished_calls == []
     assert driver._execution_unconfirmed is True
+    assert driver.manual_execution_confirmation_required is True
     client.send_error = None
-    with pytest.raises(DeviceConnectionError, match="may still be executing"):
+    with pytest.raises(
+        ExecutionCompletionUnknownError,
+        match="may still be executing",
+    ):
         await driver.run(make_output(), MagicMock(), MagicMock())
     assert client.sent_programs == []
     await driver.cleanup()
@@ -561,12 +1185,18 @@ async def test_invalid_receipt_latches_successful_transfer(
     client = client_for(driver)
     client.receipt = SimpleNamespace(retries=0)
 
-    with pytest.raises(DeviceConnectionError, match="invalid receipt"):
+    with pytest.raises(
+        ExecutionCompletionUnknownError,
+        match="invalid receipt",
+    ):
         await driver.run(make_output(), MagicMock(), MagicMock())
 
     assert client.sent_programs
     assert driver._execution_unconfirmed is True
-    with pytest.raises(DeviceConnectionError, match="may still be executing"):
+    with pytest.raises(
+        ExecutionCompletionUnknownError,
+        match="may still be executing",
+    ):
         await driver.run(make_output(), MagicMock(), MagicMock())
     await driver.cleanup()
 
@@ -612,7 +1242,10 @@ async def test_cancellation_waits_for_blocking_transfer(
     assert callback_calls == []
     assert finished_calls == []
     assert driver._execution_unconfirmed is True
-    with pytest.raises(DeviceConnectionError, match="may still be executing"):
+    with pytest.raises(
+        ExecutionCompletionUnknownError,
+        match="may still be executing",
+    ):
         await driver.run(make_output(), MagicMock(), MagicMock())
     await driver.cleanup()
 
