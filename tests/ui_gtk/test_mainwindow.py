@@ -185,6 +185,49 @@ def test_pending_confirmation_keeps_send_and_frame_actions_available(
     assert win.toolbar.frame_button.get_tooltip_text() == expected
 
 
+@pytest.mark.parametrize(
+    "status",
+    [
+        TransportStatus.CONNECTING,
+        TransportStatus.ERROR,
+        TransportStatus.DISCONNECTED,
+        TransportStatus.SLEEPING,
+    ],
+)
+def test_frame_action_is_disabled_while_not_connected(
+    window_with_machine, mocker, status
+):
+    win, machine = window_with_machine
+    machine.set_connection_status(status)
+    mocker.patch.object(win.doc_editor.doc, "has_result", return_value=True)
+    mocker.patch.object(machine, "can_frame", return_value=True)
+    mocker.patch(
+        "rayforge.ui_gtk.mainwindow.task_mgr.has_tasks", return_value=False
+    )
+
+    win._update_actions_and_ui()
+
+    assert not win.action_manager.get_action("machine-frame").get_enabled()
+
+
+def test_frame_click_is_ignored_while_reconnecting(
+    window_with_machine, mocker
+):
+    win, machine = window_with_machine
+    machine.set_connection_status(TransportStatus.SLEEPING)
+    prompt = mocker.patch.object(
+        win, "_confirm_idle_before_next_job", return_value=False
+    )
+    frame_job = mocker.patch.object(win.machine_cmd, "frame_job")
+    run_job = mocker.patch.object(win, "_run_machine_job")
+
+    win.on_frame_clicked(None, None)
+
+    prompt.assert_called_once_with(machine)
+    frame_job.assert_not_called()
+    run_job.assert_not_called()
+
+
 def test_pending_confirmation_blocks_other_machine_actions(
     window_with_machine, mocker
 ):

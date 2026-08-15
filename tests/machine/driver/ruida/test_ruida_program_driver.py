@@ -142,6 +142,7 @@ class FakeControllerClient:
         self.close_before_error = False
         self.send_error: Exception | None = None
         self.status_error: Exception | None = None
+        self.status_errors: list[Exception] = []
         self.status_responses = []
         self.status_reads = 0
         self.default_status_response = machine_status()
@@ -158,6 +159,8 @@ class FakeControllerClient:
         self.close_release: threading.Event | None = None
         self.send_started: threading.Event | None = None
         self.send_release: threading.Event | None = None
+        self.status_started: threading.Event | None = None
+        self.status_release: threading.Event | None = None
         self.receipt = SimpleNamespace(
             completed_packets=2,
             transmissions=2,
@@ -241,6 +244,12 @@ class FakeControllerClient:
 
     def read_machine_status(self):
         self.status_reads += 1
+        if self.status_started is not None:
+            self.status_started.set()
+        if self.status_release is not None:
+            self.status_release.wait()
+        if self.status_errors:
+            raise self.status_errors.pop(0)
         if self.status_error is not None:
             raise self.status_error
         if self.status_responses:
@@ -1237,6 +1246,549 @@ async def test_unknown_status_flags_fail_closed_without_clearing_latch(
 
 
 @pytest.mark.asyncio
+async def test_idle_status_failure_reopens_session_and_resumes_polling(
+    fake_api,
+    driver_objects,
+    caplog,
+):
+    context, machine = driver_objects
+    driver = RuidaSerialDriver(context, machine)
+    driver.STATUS_POLL_INTERVAL = 0.005
+    driver.STATUS_RECONNECT_INITIAL_DELAY = 0.005
+    driver.STATUS_RECONNECT_MAX_DELAY = 0.005
+    statuses = []
+    driver.connection_status_changed.connect(
+        lambda sender, status, message: statuses.append(status),
+        weak=False,
+    )
+    driver.setup(port="/dev/cu.ruida", baudrate=115200)
+    await driver.connect()
+    client = client_for(driver)
+    initial_generation = driver._session_generation
+    initial_status_task = driver._status_task
+
+    try:
+        with caplog.at_level(logging.WARNING, logger=program_driver.__name__):
+            client.status_errors.append(
+                UnexpectedStatusFailure("transient status timeout")
+            )
+            await wait_until(
+                lambda: (
+                    client.open_probes == [False, False]
+                    and statuses[-1] == TransportStatus.CONNECTED
+                )
+            )
+
+        assert TransportStatus.SLEEPING in statuses
+        assert TransportStatus.ERROR not in statuses
+        assert client.close_calls == 1
+        assert client.is_ready is True
+        assert driver.state.status == DeviceStatus.IDLE
+        assert driver._session_generation == initial_generation + 1
+        assert initial_status_task is not None
+        assert initial_status_task.done()
+        assert driver._status_task is not None
+        assert driver._status_task is not initial_status_task
+        assert not driver._status_task.done()
+        assert "transient status timeout" in caplog.text
+    finally:
+        await driver.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_idle_status_recovery_retries_failed_reopen_status(
+    fake_api,
+    driver_objects,
+):
+    context, machine = driver_objects
+    driver = RuidaSerialDriver(context, machine)
+    driver.STATUS_POLL_INTERVAL = 0.005
+    driver.STATUS_RECONNECT_INITIAL_DELAY = 0.005
+    driver.STATUS_RECONNECT_MAX_DELAY = 0.005
+    statuses = []
+    driver.connection_status_changed.connect(
+        lambda sender, status, message: statuses.append(status),
+        weak=False,
+    )
+    driver.setup(port="/dev/cu.ruida", baudrate=115200)
+    await driver.connect()
+    client = client_for(driver)
+    try:
+        client.status_errors.extend(
+            [
+                UnexpectedStatusFailure("poll timeout"),
+                UnexpectedStatusFailure("reopen status timeout"),
+            ]
+        )
+
+        await wait_until(
+            lambda: (
+                client.open_probes == [False, False, False]
+                and statuses[-1] == TransportStatus.CONNECTED
+            )
+        )
+
+        assert statuses.count(TransportStatus.SLEEPING) >= 2
+        assert TransportStatus.ERROR not in statuses
+        assert client.close_calls == 2
+        assert client.is_ready is True
+        assert driver.state.status == DeviceStatus.IDLE
+    finally:
+        await driver.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_cleanup_cancels_idle_status_reconnect_backoff(
+    fake_api,
+    driver_objects,
+):
+    context, machine = driver_objects
+    driver = RuidaSerialDriver(context, machine)
+    driver.STATUS_POLL_INTERVAL = 0.005
+    driver.STATUS_RECONNECT_INITIAL_DELAY = 60.0
+    statuses = []
+    driver.connection_status_changed.connect(
+        lambda sender, status, message: statuses.append(status),
+        weak=False,
+    )
+    driver.setup(port="/dev/cu.ruida", baudrate=115200)
+    await driver.connect()
+    client = client_for(driver)
+    try:
+        client.status_errors.append(UnexpectedStatusFailure("status timeout"))
+        await wait_until(
+            lambda: (
+                client.close_calls == 1
+                and statuses[-1] == TransportStatus.SLEEPING
+            )
+        )
+
+        await asyncio.wait_for(driver.cleanup(), timeout=0.2)
+
+        assert client.open_probes == [False]
+        assert client.is_ready is False
+        assert driver._status_task is None
+        assert driver._status_reconnect_task is None
+        assert driver._client is None
+        assert statuses[-1] == TransportStatus.DISCONNECTED
+    finally:
+        if driver._client is not None:
+            await driver.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_udp_status_recovery_uses_configured_probe(
+    fake_api,
+    driver_objects,
+):
+    context, machine = driver_objects
+    driver = RuidaUdpProgramDriver(context, machine)
+    driver.STATUS_POLL_INTERVAL = 0.005
+    driver.STATUS_RECONNECT_INITIAL_DELAY = 0.005
+    statuses = []
+    driver.connection_status_changed.connect(
+        lambda sender, status, message: statuses.append(status),
+        weak=False,
+    )
+    driver.setup(host="192.0.2.10", port=50200, local_port=40200)
+    await driver.connect()
+    client = client_for(driver)
+
+    try:
+        client.status_errors.append(UnexpectedStatusFailure("status timeout"))
+        await wait_until(
+            lambda: (
+                client.open_probes == [True, True]
+                and statuses[-1] == TransportStatus.CONNECTED
+            )
+        )
+
+        assert client.close_calls == 1
+        assert client.is_ready is True
+    finally:
+        await driver.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_idle_status_close_failure_never_reopens(
+    fake_api,
+    driver_objects,
+):
+    context, machine = driver_objects
+    driver = RuidaSerialDriver(context, machine)
+    driver.STATUS_POLL_INTERVAL = 0.005
+    driver.STATUS_RECONNECT_INITIAL_DELAY = 0.005
+    statuses = []
+    driver.connection_status_changed.connect(
+        lambda sender, status, message: statuses.append(status),
+        weak=False,
+    )
+    driver.setup(port="/dev/cu.ruida", baudrate=115200)
+    await driver.connect()
+    client = client_for(driver)
+    client.close_error = RuntimeError("close failed")
+
+    try:
+        client.status_errors.append(UnexpectedStatusFailure("status timeout"))
+        await wait_until(lambda: statuses[-1] == TransportStatus.ERROR)
+        await asyncio.sleep(0.02)
+
+        assert client.open_probes == [False]
+        assert client.close_calls == 1
+        assert client.is_ready is True
+        assert driver._status_reconnect_task is None
+    finally:
+        client.close_error = None
+        await driver.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_status_failure_during_program_transfer_never_reopens(
+    fake_api,
+    driver_objects,
+):
+    context, machine = driver_objects
+    driver = RuidaSerialDriver(context, machine)
+    driver.STATUS_POLL_INTERVAL = 0.005
+    driver.STATUS_RECONNECT_INITIAL_DELAY = 0.005
+    statuses = []
+    driver.connection_status_changed.connect(
+        lambda sender, status, message: statuses.append(status),
+        weak=False,
+    )
+    driver.setup(port="/dev/cu.ruida", baudrate=115200)
+    await driver.connect()
+    client = client_for(driver)
+    driver._program_active = True
+
+    try:
+        client.status_errors.append(UnexpectedStatusFailure("status timeout"))
+        await wait_until(
+            lambda: (
+                statuses[-1] == TransportStatus.ERROR
+                and client.close_calls == 1
+            )
+        )
+        await asyncio.sleep(0.02)
+
+        assert client.open_probes == [False]
+        assert client.is_ready is False
+        assert driver._status_reconnect_task is None
+    finally:
+        driver._program_active = False
+        await driver.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_status_recovery_does_not_clear_latch_set_during_open(
+    fake_api,
+    driver_objects,
+):
+    context, machine = driver_objects
+    driver = RuidaSerialDriver(context, machine)
+    driver.STATUS_POLL_INTERVAL = 0.005
+    driver.STATUS_RECONNECT_INITIAL_DELAY = 0.005
+    statuses = []
+    driver.connection_status_changed.connect(
+        lambda sender, status, message: statuses.append(status),
+        weak=False,
+    )
+    driver.setup(port="/dev/cu.ruida", baudrate=115200)
+    await driver.connect()
+    client = client_for(driver)
+    open_started = threading.Event()
+    open_release = threading.Event()
+    client.open_started = open_started
+    client.open_release = open_release
+
+    try:
+        client.status_errors.append(UnexpectedStatusFailure("status timeout"))
+        assert await asyncio.to_thread(open_started.wait, 1.0)
+        driver._execution_unconfirmed = True
+        open_release.set()
+        await wait_until(
+            lambda: (
+                statuses[-1] == TransportStatus.ERROR
+                and client.close_calls == 2
+            )
+        )
+        await asyncio.sleep(0.02)
+
+        assert driver.manual_execution_confirmation_required is True
+        assert client.open_probes == [False, False]
+        assert client.is_ready is False
+        assert driver._status_reconnect_task is None
+    finally:
+        open_release.set()
+        await driver.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_cleanup_cancels_blocked_status_reconnect_read(
+    fake_api,
+    driver_objects,
+):
+    context, machine = driver_objects
+    driver = RuidaSerialDriver(context, machine)
+    driver.STATUS_POLL_INTERVAL = 0.005
+    driver.STATUS_RECONNECT_INITIAL_DELAY = 0.05
+    statuses = []
+    driver.connection_status_changed.connect(
+        lambda sender, status, message: statuses.append(status),
+        weak=False,
+    )
+    driver.setup(port="/dev/cu.ruida", baudrate=115200)
+    await driver.connect()
+    client = client_for(driver)
+    status_started = threading.Event()
+    status_release = threading.Event()
+
+    try:
+        client.status_errors.append(UnexpectedStatusFailure("status timeout"))
+        await wait_until(
+            lambda: (
+                client.close_calls == 1
+                and statuses[-1] == TransportStatus.SLEEPING
+            )
+        )
+        client.status_started = status_started
+        client.status_release = status_release
+        assert await asyncio.to_thread(status_started.wait, 1.0)
+
+        cleanup_task = asyncio.create_task(driver.cleanup())
+        await asyncio.sleep(0)
+        assert not cleanup_task.done()
+        status_release.set()
+        await asyncio.wait_for(cleanup_task, timeout=0.2)
+
+        assert client.open_probes == [False, False]
+        assert client.close_calls == 2
+        assert client.is_ready is False
+        assert driver._status_task is None
+        assert driver._status_reconnect_task is None
+        assert driver._client is None
+        assert statuses[-1] == TransportStatus.DISCONNECTED
+    finally:
+        status_release.set()
+        if driver._client is not None:
+            await driver.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_cleanup_cancellation_wins_when_reconnect_open_raises(
+    fake_api,
+    driver_objects,
+):
+    context, machine = driver_objects
+    driver = RuidaSerialDriver(context, machine)
+    driver.STATUS_POLL_INTERVAL = 0.005
+    driver.STATUS_RECONNECT_INITIAL_DELAY = 0.05
+    statuses = []
+    driver.connection_status_changed.connect(
+        lambda sender, status, message: statuses.append(status),
+        weak=False,
+    )
+    driver.setup(port="/dev/cu.ruida", baudrate=115200)
+    await driver.connect()
+    client = client_for(driver)
+    open_started = threading.Event()
+    open_release = threading.Event()
+
+    try:
+        client.status_errors.append(UnexpectedStatusFailure("status timeout"))
+        await wait_until(
+            lambda: (
+                client.close_calls == 1
+                and statuses[-1] == TransportStatus.SLEEPING
+            )
+        )
+        client.open_started = open_started
+        client.open_release = open_release
+        client.open_error = RuntimeError("open failed")
+        assert await asyncio.to_thread(open_started.wait, 1.0)
+        reconnect_task = driver._status_reconnect_task
+        assert reconnect_task is not None
+
+        cleanup_task = asyncio.create_task(driver.cleanup())
+        await wait_until(lambda: reconnect_task.cancelling() > 0)
+        open_release.set()
+        await asyncio.wait_for(cleanup_task, timeout=0.2)
+
+        assert client.open_probes == [False, False]
+        assert client.close_calls == 1
+        assert client.is_ready is False
+        assert driver._status_task is None
+        assert driver._status_reconnect_task is None
+        assert driver._client is None
+        assert statuses[-1] == TransportStatus.DISCONNECTED
+    finally:
+        open_release.set()
+        client.open_error = None
+        if driver._client is not None:
+            await driver.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_cleanup_cancellation_wins_when_reconnect_status_raises(
+    fake_api,
+    driver_objects,
+):
+    context, machine = driver_objects
+    driver = RuidaSerialDriver(context, machine)
+    driver.STATUS_POLL_INTERVAL = 0.005
+    driver.STATUS_RECONNECT_INITIAL_DELAY = 0.05
+    statuses = []
+    driver.connection_status_changed.connect(
+        lambda sender, status, message: statuses.append(status),
+        weak=False,
+    )
+    driver.setup(port="/dev/cu.ruida", baudrate=115200)
+    await driver.connect()
+    client = client_for(driver)
+    status_started = threading.Event()
+    status_release = threading.Event()
+
+    try:
+        client.status_errors.append(UnexpectedStatusFailure("status timeout"))
+        await wait_until(
+            lambda: (
+                client.close_calls == 1
+                and statuses[-1] == TransportStatus.SLEEPING
+            )
+        )
+        client.status_started = status_started
+        client.status_release = status_release
+        client.status_errors.append(RuntimeError("status read failed"))
+        assert await asyncio.to_thread(status_started.wait, 1.0)
+        reconnect_task = driver._status_reconnect_task
+        assert reconnect_task is not None
+
+        cleanup_task = asyncio.create_task(driver.cleanup())
+        await wait_until(lambda: reconnect_task.cancelling() > 0)
+        status_release.set()
+        await asyncio.wait_for(cleanup_task, timeout=0.2)
+
+        assert client.open_probes == [False, False]
+        assert client.close_calls == 2
+        assert client.is_ready is False
+        assert driver._status_task is None
+        assert driver._status_reconnect_task is None
+        assert driver._client is None
+        assert statuses[-1] == TransportStatus.DISCONNECTED
+    finally:
+        status_release.set()
+        if driver._client is not None:
+            await driver.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_cleanup_cancellation_wins_during_failed_reconnect_close(
+    fake_api,
+    driver_objects,
+):
+    context, machine = driver_objects
+    driver = RuidaSerialDriver(context, machine)
+    driver.STATUS_POLL_INTERVAL = 0.005
+    driver.STATUS_RECONNECT_INITIAL_DELAY = 0.05
+    statuses = []
+    driver.connection_status_changed.connect(
+        lambda sender, status, message: statuses.append(status),
+        weak=False,
+    )
+    driver.setup(port="/dev/cu.ruida", baudrate=115200)
+    await driver.connect()
+    client = client_for(driver)
+    close_started = threading.Event()
+    close_release = threading.Event()
+
+    try:
+        client.status_errors.append(UnexpectedStatusFailure("status timeout"))
+        await wait_until(
+            lambda: (
+                client.close_calls == 1
+                and statuses[-1] == TransportStatus.SLEEPING
+            )
+        )
+        client.status_errors.append(RuntimeError("reconnect status failed"))
+        client.close_started = close_started
+        client.close_release = close_release
+        assert await asyncio.to_thread(close_started.wait, 1.0)
+        reconnect_task = driver._status_reconnect_task
+        assert reconnect_task is not None
+
+        cleanup_task = asyncio.create_task(driver.cleanup())
+        await wait_until(lambda: reconnect_task.cancelling() > 0)
+        close_release.set()
+        await asyncio.wait_for(cleanup_task, timeout=0.2)
+
+        assert client.open_probes == [False, False]
+        assert client.close_calls == 2
+        assert client.is_ready is False
+        assert driver._status_task is None
+        assert driver._status_reconnect_task is None
+        assert driver._client is None
+        assert statuses[-1] == TransportStatus.DISCONNECTED
+    finally:
+        close_release.set()
+        if driver._client is not None:
+            await driver.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_status_recovery_rechecks_resource_conflicts(
+    fake_api,
+    driver_objects,
+):
+    context, machine = driver_objects
+    driver = RuidaSerialDriver(context, machine)
+    driver.STATUS_POLL_INTERVAL = 0.005
+    driver.STATUS_RECONNECT_INITIAL_DELAY = 0.02
+    driver.STATUS_RECONNECT_MAX_DELAY = 0.02
+    statuses = []
+    driver.connection_status_changed.connect(
+        lambda sender, status, message: statuses.append(status),
+        weak=False,
+    )
+    driver.setup(port="/dev/cu.ruida", baudrate=115200)
+    await driver.connect()
+    client = client_for(driver)
+    busy = {"connected": True}
+
+    try:
+        client.status_errors.append(UnexpectedStatusFailure("status timeout"))
+        await wait_until(
+            lambda: (
+                client.close_calls == 1
+                and statuses[-1] == TransportStatus.SLEEPING
+            )
+        )
+        other_driver = SimpleNamespace(resource_uri=driver.resource_uri)
+        other_machine = SimpleNamespace(
+            name="Other laser",
+            driver=other_driver,
+            is_connected=lambda: busy["connected"],
+        )
+        context.machine_mgr.machines["other"] = other_machine
+
+        await asyncio.sleep(0.06)
+        assert client.open_probes == [False]
+        assert statuses[-1] == TransportStatus.SLEEPING
+        assert driver._status_reconnect_task is not None
+
+        busy["connected"] = False
+        await wait_until(
+            lambda: (
+                client.open_probes == [False, False]
+                and statuses[-1] == TransportStatus.CONNECTED
+            )
+        )
+        assert client.is_ready is True
+    finally:
+        busy["connected"] = False
+        await driver.cleanup()
+
+
+@pytest.mark.asyncio
 async def test_status_failure_invalidates_session_and_retains_latch(
     fake_api, driver_objects
 ):
@@ -1259,6 +1811,7 @@ async def test_status_failure_invalidates_session_and_retains_latch(
     assert driver.state.status == DeviceStatus.UNKNOWN
     assert driver.manual_execution_confirmation_required is True
     assert client.is_ready is False
+    assert client.open_probes == [False]
     await driver.cleanup()
 
 

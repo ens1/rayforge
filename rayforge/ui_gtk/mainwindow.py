@@ -1720,7 +1720,8 @@ class MainWindow(Adw.ApplicationWindow):
             am.get_action("machine-home").set_enabled(can_home)
 
             can_frame = (
-                active_machine.can_frame()
+                conn_status == TransportStatus.CONNECTED
+                and active_machine.can_frame()
                 and doc.has_result()
                 and not is_job_or_task_active
             )
@@ -2296,6 +2297,8 @@ class MainWindow(Adw.ApplicationWindow):
         if self._machine_job_submission_pending:
             return
         if self._confirm_idle_before_next_job(machine):
+            return
+        if not machine.is_connected():
             return
 
         # Disable focus mode when framing

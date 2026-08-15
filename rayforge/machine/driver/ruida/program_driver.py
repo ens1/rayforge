@@ -68,6 +68,14 @@ _BOSS_PAUSED_STATUS_WORD = 0x10403
 _BOSS_STOP_TRANSITION_WORD = 0x510600
 
 
+class _StatusReconnectAbortedError(DeviceConnectionError):
+    pass
+
+
+class _StatusReconnectCloseError(DeviceConnectionError):
+    pass
+
+
 def _load_ruida_re() -> Any:
     try:
         module = importlib.import_module("ruida_re")
@@ -108,6 +116,8 @@ class RuidaProgramDriver(Driver):
     _probe_on_open = True
     _supports_boss_da000400_status_profile = False
     STATUS_POLL_INTERVAL: float = 0.2
+    STATUS_RECONNECT_INITIAL_DELAY: float = 1.0
+    STATUS_RECONNECT_MAX_DELAY: float = 5.0
     COMPLETION_IDLE_SAMPLES: int = 3
     ACTIVE_OBSERVATION_IDLE_SAMPLES: int = 25
     STOP_IDLE_MIN_DURATION: float = 0.6
@@ -124,6 +134,8 @@ class RuidaProgramDriver(Driver):
         self._program_active = False
         self._execution_unconfirmed = False
         self._status_task: asyncio.Task | None = None
+        self._status_reconnect_task: asyncio.Task | None = None
+        self._status_reconnect_generation: int | None = None
         self._session_generation = 0
         self._job_generation = 0
         self._active_job_generation: int | None = None
@@ -261,13 +273,51 @@ class RuidaProgramDriver(Driver):
         self._resource = resource
 
     async def _connect_implementation(self) -> None:
+        reconnect_task = self._status_reconnect_task
+        automatic_reconnect = asyncio.current_task() is reconnect_task
+        reconnect_generation = (
+            self._status_reconnect_generation if automatic_reconnect else None
+        )
+        if not automatic_reconnect:
+            await self._stop_status_reconnect()
+
         client = self._client
         if client is None:
             error = DeviceConnectionError(_("Ruida driver is not configured."))
             self._update_connection_status(TransportStatus.ERROR, str(error))
             raise error
 
+        if automatic_reconnect and (
+            reconnect_generation is None
+            or not self._idle_status_recovery_allowed(
+                client,
+                reconnect_generation,
+            )
+        ):
+            error = _StatusReconnectAbortedError(
+                _("Ruida status reconnect was no longer safe.")
+            )
+            self._update_connection_status(TransportStatus.ERROR, str(error))
+            raise error
+
         if getattr(client, "is_ready", False):
+            if automatic_reconnect:
+                closed = await self._close_after_cancelled_open(client)
+                error = _StatusReconnectAbortedError(
+                    _(
+                        "Ruida status reconnect found an unexpected open "
+                        "session."
+                    )
+                )
+                if not closed:
+                    error = _StatusReconnectCloseError(
+                        _("Could not close the unexpected Ruida session.")
+                    )
+                self._update_connection_status(
+                    TransportStatus.ERROR,
+                    str(error),
+                )
+                raise error
             if self._has_validated_status_semantics:
                 await self._refresh_status(client)
             self._update_connection_status(TransportStatus.CONNECTED)
@@ -276,19 +326,67 @@ class RuidaProgramDriver(Driver):
 
         self._update_connection_status(TransportStatus.CONNECTING)
         try:
-            await self._call_blocking(
-                client.open,
-                probe=self._probe_on_open,
-            )
-            device_status = DeviceStatus.UNKNOWN
-            if self._has_validated_status_semantics:
-                status = await self._call_blocking(client.read_machine_status)
-                device_status = self._publish_machine_status(status)
+            async with self._io_lock:
+                if automatic_reconnect and not (
+                    self._idle_status_recovery_allowed(
+                        client,
+                        reconnect_generation,
+                    )
+                ):
+                    raise _StatusReconnectAbortedError(
+                        _("Ruida status reconnect was no longer safe.")
+                    )
+                await self._call_blocking_unlocked(
+                    client.open,
+                    probe=self._probe_on_open,
+                    _preserve_cancellation_on_error=automatic_reconnect,
+                )
+                if automatic_reconnect and not (
+                    self._idle_status_recovery_allowed(
+                        client,
+                        reconnect_generation,
+                    )
+                ):
+                    raise _StatusReconnectAbortedError(
+                        _(
+                            "Ruida status reconnect became unsafe after "
+                            "opening."
+                        )
+                    )
+                device_status = DeviceStatus.UNKNOWN
+                if self._has_validated_status_semantics:
+                    status = await self._call_blocking_unlocked(
+                        client.read_machine_status,
+                        _preserve_cancellation_on_error=(automatic_reconnect),
+                    )
+                    if automatic_reconnect and not (
+                        self._idle_status_recovery_allowed(
+                            client,
+                            reconnect_generation,
+                        )
+                    ):
+                        raise _StatusReconnectAbortedError(
+                            _(
+                                "Ruida status reconnect became unsafe while "
+                                "validating status."
+                            )
+                        )
+                    device_status = self._publish_machine_status(status)
+                    if automatic_reconnect and not (
+                        self._idle_status_recovery_allowed(
+                            client,
+                            reconnect_generation,
+                        )
+                    ):
+                        raise _StatusReconnectAbortedError(
+                            _(
+                                "Ruida status reconnect became unsafe while "
+                                "publishing status."
+                            )
+                        )
         except asyncio.CancelledError:
-            await self._close_after_cancelled_open(client)
-            if getattr(client, "is_open", False) or getattr(
-                client, "is_ready", False
-            ):
+            closed = await self._close_after_cancelled_open(client)
+            if not closed:
                 self._update_connection_status(
                     TransportStatus.ERROR,
                     _("Could not close the cancelled Ruida connection."),
@@ -297,14 +395,34 @@ class RuidaProgramDriver(Driver):
                 self._update_connection_status(TransportStatus.DISCONNECTED)
             raise
         except Exception as error:
-            await self._close_after_cancelled_open(client)
+            closed = await self._close_after_cancelled_open(client)
+            if automatic_reconnect and not closed:
+                close_error = _StatusReconnectCloseError(
+                    _("Could not close the failed Ruida status reconnect.")
+                )
+                self._update_connection_status(
+                    TransportStatus.ERROR,
+                    str(close_error),
+                )
+                raise close_error from error
+            if isinstance(error, _StatusReconnectAbortedError):
+                self._update_connection_status(
+                    TransportStatus.ERROR,
+                    str(error),
+                )
+                raise
             message = _("Could not connect to the Ruida controller: {error}")
             wrapped = DeviceConnectionError(message.format(error=error))
-            self._update_connection_status(TransportStatus.ERROR, str(wrapped))
+            reconnect_status = (
+                TransportStatus.SLEEPING
+                if automatic_reconnect
+                else TransportStatus.ERROR
+            )
+            self._update_connection_status(reconnect_status, str(wrapped))
             raise wrapped from error
 
         self._session_generation += 1
-        if (
+        if not automatic_reconnect and (
             not self._has_validated_status_semantics
             or device_status == DeviceStatus.IDLE
         ):
@@ -312,26 +430,30 @@ class RuidaProgramDriver(Driver):
         self._update_connection_status(TransportStatus.CONNECTED)
         self._start_status_polling(client)
 
-    async def _close_after_cancelled_open(self, client: Any) -> None:
+    async def _close_after_cancelled_open(self, client: Any) -> bool:
         if not (
             getattr(client, "is_open", False)
             or getattr(client, "is_ready", False)
         ):
-            return
+            return True
         try:
             await self._call_blocking(client.close)
-        except asyncio.CancelledError:
-            pass
         except Exception as error:  # noqa: BLE001 - cancellation cleanup
             logger.warning(
                 "Could not close cancelled Ruida program transport: %s",
                 error,
                 extra=self._log_extra("MACHINE_EVENT"),
             )
+            return False
+        return not (
+            getattr(client, "is_open", False)
+            or getattr(client, "is_ready", False)
+        )
 
     async def cleanup(self) -> None:
         client = self._client
         await self._stop_status_polling()
+        await self._stop_status_reconnect()
         self._session_generation += 1
         if self._active_job_generation is not None:
             self._execution_unconfirmed = True
@@ -392,6 +514,7 @@ class RuidaProgramDriver(Driver):
 
     async def _finalize_cleanup(self) -> None:
         await self._stop_status_polling()
+        await self._stop_status_reconnect()
         self._client = None
         self._transport = None
         self._resource = None
@@ -476,18 +599,36 @@ class RuidaProgramDriver(Driver):
                 "Ruida status task failed during cleanup", exc_info=True
             )
 
+    async def _stop_status_reconnect(self) -> None:
+        task = self._status_reconnect_task
+        if task is None or task is asyncio.current_task():
+            return
+        if not task.done():
+            task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            logger.debug(
+                "Ruida status reconnect task failed during cleanup",
+                exc_info=True,
+            )
+        finally:
+            if self._status_reconnect_task is task:
+                self._status_reconnect_task = None
+                self._status_reconnect_generation = None
+
     async def _status_poll_loop(
         self,
         client: Any,
         session_generation: int,
     ) -> None:
         try:
-            while (
-                client is self._client
-                and session_generation == self._session_generation
-                and getattr(client, "is_ready", False)
-                and self._has_validated_status_semantics
-            ):
+            while self._status_session_is_current(
+                client,
+                session_generation,
+            ) and getattr(client, "is_ready", False):
                 await asyncio.sleep(self.STATUS_POLL_INTERVAL)
                 observed_generation = self._active_job_generation
                 try:
@@ -525,11 +666,13 @@ class RuidaProgramDriver(Driver):
         session_generation: int,
         error: BaseException,
     ) -> None:
-        if (
-            client is not self._client
-            or session_generation != self._session_generation
-        ):
+        if not self._status_session_is_current(client, session_generation):
             return
+        logger.warning(
+            "Ruida status poll failed: %s",
+            error,
+            extra=self._log_extra("MACHINE_EVENT"),
+        )
         self._set_device_status(DeviceStatus.UNKNOWN)
         active_generation = self._active_job_generation
         if active_generation is not None:
@@ -542,16 +685,198 @@ class RuidaProgramDriver(Driver):
                 active_generation,
                 ExecutionCompletionUnknownError(message.format(error=error)),
             )
-        self._update_connection_status(TransportStatus.ERROR, str(error))
+        if (
+            active_generation is not None
+            or self._program_active
+            or self._execution_unconfirmed
+        ):
+            self._update_connection_status(TransportStatus.ERROR, str(error))
+            await self._close_failed_status_client(client)
+            return
+
+        closed = await self._close_failed_status_client(client)
+        if not closed:
+            message = _(
+                "Could not fully close the Ruida connection after a status "
+                "failure."
+            )
+            self._update_connection_status(TransportStatus.ERROR, message)
+            return
+        if not self._idle_status_recovery_allowed(
+            client,
+            session_generation,
+        ):
+            self._update_connection_status(TransportStatus.ERROR, str(error))
+            return
+        self._update_connection_status(
+            TransportStatus.SLEEPING,
+            str(error),
+        )
+        self._schedule_status_reconnect(
+            client,
+            session_generation,
+            asyncio.current_task(),
+        )
+
+    def _status_session_is_current(
+        self,
+        client: Any,
+        session_generation: int,
+    ) -> bool:
+        return bool(
+            client is self._client
+            and session_generation == self._session_generation
+            and self._has_validated_status_semantics
+        )
+
+    def _idle_status_recovery_allowed(
+        self,
+        client: Any,
+        session_generation: int | None,
+    ) -> bool:
+        return bool(
+            session_generation is not None
+            and self._status_session_is_current(client, session_generation)
+            and self._active_job_generation is None
+            and not self._program_active
+            and not self._execution_unconfirmed
+        )
+
+    async def _close_failed_status_client(self, client: Any) -> bool:
         try:
             await self._call_blocking(client.close)
         except asyncio.CancelledError:
             raise
-        except Exception:
-            logger.debug(
+        except Exception as error:
+            logger.warning(
                 "Could not close Ruida connection after status failure",
-                exc_info=True,
+                extra=self._log_extra("MACHINE_EVENT"),
+                exc_info=error,
             )
+            return False
+        if getattr(client, "is_open", False) or getattr(
+            client,
+            "is_ready",
+            False,
+        ):
+            logger.warning(
+                "Ruida connection remained open after status failure",
+                extra=self._log_extra("MACHINE_EVENT"),
+            )
+            return False
+        return True
+
+    def _schedule_status_reconnect(
+        self,
+        client: Any,
+        session_generation: int,
+        failed_poll_task: asyncio.Task | None,
+    ) -> None:
+        task = self._status_reconnect_task
+        if task is not None and not task.done():
+            return
+        self._status_reconnect_generation = session_generation
+        self._status_reconnect_task = asyncio.create_task(
+            self._recover_idle_status_session(
+                client,
+                session_generation,
+                failed_poll_task,
+            ),
+            name="ruida-status-reconnect",
+        )
+
+    async def _recover_idle_status_session(
+        self,
+        client: Any,
+        session_generation: int,
+        failed_poll_task: asyncio.Task | None,
+    ) -> None:
+        delay = self.STATUS_RECONNECT_INITIAL_DELAY
+        current_task = asyncio.current_task()
+        try:
+            if (
+                failed_poll_task is not None
+                and failed_poll_task is not current_task
+            ):
+                await asyncio.shield(failed_poll_task)
+            while self._idle_status_recovery_allowed(
+                client,
+                session_generation,
+            ):
+                await asyncio.sleep(delay)
+                if not self._idle_status_recovery_allowed(
+                    client,
+                    session_generation,
+                ):
+                    return
+                if getattr(client, "is_open", False) or getattr(
+                    client,
+                    "is_ready",
+                    False,
+                ):
+                    message = _(
+                        "Ruida status reconnect stopped because the failed "
+                        "session remained open."
+                    )
+                    self._update_connection_status(
+                        TransportStatus.ERROR,
+                        message,
+                    )
+                    return
+                try:
+                    await self.connect()
+                except asyncio.CancelledError:
+                    raise
+                except (
+                    _StatusReconnectAbortedError,
+                    _StatusReconnectCloseError,
+                ) as error:
+                    logger.warning(
+                        "Ruida status reconnect stopped: %s",
+                        error,
+                        extra=self._log_extra("MACHINE_EVENT"),
+                    )
+                    return
+                except BaseException as error:
+                    if not isinstance(error, Exception):
+                        raise
+                    logger.warning(
+                        "Ruida status reconnect failed: %s",
+                        error,
+                        extra=self._log_extra("MACHINE_EVENT"),
+                    )
+                    if getattr(client, "is_open", False) or getattr(
+                        client,
+                        "is_ready",
+                        False,
+                    ):
+                        self._update_connection_status(
+                            TransportStatus.ERROR,
+                            _(
+                                "Ruida status reconnect left the failed "
+                                "session open."
+                            ),
+                        )
+                        return
+                    if not self._idle_status_recovery_allowed(
+                        client,
+                        session_generation,
+                    ):
+                        return
+                    self._update_connection_status(
+                        TransportStatus.SLEEPING,
+                        str(error),
+                    )
+                    delay = min(
+                        delay * 2,
+                        self.STATUS_RECONNECT_MAX_DELAY,
+                    )
+                    continue
+                return
+        finally:
+            if self._status_reconnect_task is current_task:
+                self._status_reconnect_task = None
+                self._status_reconnect_generation = None
 
     def _status_fields(
         self,
