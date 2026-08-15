@@ -104,8 +104,8 @@ We also have a [Discord](https://discord.gg/sTHNdTtpQJ).
 | **GRBL**         | Network (WiFi/Ethernet) | Connect to any GRBL device on your network.                              |
 | **Smoothieware** | Telnet                  | Supported since version 0.15.                                            |
 | **Marlin**       | Serial Port             | Supported since version 1.7.2.                                           |
-| **Ruida**        | USB Serial              | Experimental `.rd` program transfer; execution is not monitored.         |
-| **Ruida**        | Network (UDP)           | Experimental `.rd` program transfer; no controller management or status. |
+| **Ruida**        | USB Serial              | Experimental `.rd` transfer; the built-in Boss LS2040 profile has hardware-validated completion monitoring. |
+| **Ruida**        | Network (UDP)           | Experimental `.rd` transfer; completion is operator-confirmed. |
 | **OctoPrint**    | Network (HTTP API)      | Connect through an OctoPrint server.                                     |
 
 ### Experimental Ruida Program Generation
@@ -114,16 +114,34 @@ Rayforge compiles complete Ruida `.rd` programs through
 [ruida-re](https://github.com/ens1/ruida-re) and transfers them over USB
 serial or UDP. The conservative, hardware-observed `proven` profile remains
 the default. Advanced behavior must be enabled with an explicit research
-profile. Because these transports do not report execution completion, the
-next Send or Frame action requires the operator to confirm that the controller
-is visibly idle. Rayforge then opens a fresh connection without resending the
+profile. The built-in Boss LS2040 USB-serial profile polls Ruida's read-only
+`DA 00 04 00` program-status word and explicitly enables the meanings
+validated on that machine in the
+[scoped status evidence manifest](tests/machine/driver/ruida/fixtures/hardware/boss-ls2040-usb-serial-status-da000400-v1/manifest-v1.json).
+Normal completion requires a post-send active word
+followed by three consecutive `0x10600` samples. If polling misses a short
+job's active state, completion remains operator-confirmed. Other Ruida profiles
+do not issue this status request: their UI status stays Unknown, and the next
+Send or Frame action requires the operator to confirm that the controller is
+visibly idle. Rayforge then opens a fresh connection without resending the
 previous job; the operator starts the next action separately.
 
-The Stop action sends Ruida's software process-stop command. It remains
-available during a submission and while execution is unconfirmed, but it is
-serialized behind any active transfer and is not an emergency stop. A host
-write or network acknowledgement does not prove that motion has halted, so
-Stop does not clear the visible-idle confirmation requirement.
+This status is the controller's program state, not a complete motion-safety
+signal. On the validated machine, about ten manual panel jogs left the reported
+word unchanged at `0x0`. Rayforge therefore labels the scoped state as
+**Program idle** and cannot detect someone jogging from the controller panel.
+Before Send or Frame, the operator must still verify that panel operation has
+stopped, the route is clear, and it is safe to begin a new program.
+
+The Stop action sends Ruida's software process-stop command once with retries
+disabled. It remains available during a submission and while execution is
+unconfirmed, but it is serialized behind any active transfer and is not an
+emergency stop. On the hardware-validated Boss profile, Stop is confirmed only
+for the
+same job generation after Rayforge observed it active and then observed exact
+`0x10600` status for at least three samples and 600 ms. That outcome is
+cancelled, not successful, and adds no machine hours. Every other Stop outcome
+retains the visible-idle confirmation requirement.
 
 Narrow planned-path coupons have been run on a Boss LS2040 over USB
 serial. A direct 10% coupon produced the expected motion without visible
@@ -241,9 +259,11 @@ restoration, other Z offsets or layer structures, and physical Z semantics
 remain unvalidated. Rotary, cut-through controls, generic endpoint Z motion,
 and other unobserved combinations remain unsupported.
 
-Ruida drivers are transfer-only. They do not manage the controller or monitor
-job execution, so a successful transfer is not confirmation that cutting or
-engraving has finished. See the
+Ruida drivers transfer programs. Only an explicitly scoped USB-serial
+device profile polls exact status words to confirm job execution; unscoped and
+UDP profiles keep status Unknown and require operator confirmation. A
+successful transfer alone is not confirmation that cutting or engraving has
+finished. See the
 [firmware reference](website/docs/reference/firmware.md#ruida-controllers) for
 the exact profile scopes and lifecycle.
 

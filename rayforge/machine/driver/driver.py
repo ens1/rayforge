@@ -48,6 +48,10 @@ class ExecutionCompletionUnknownError(DeviceConnectionError):
     """Raised when a submitted program may still be executing."""
 
 
+class JobCancelledError(DeviceConnectionError):
+    """Raised when a submitted program was confirmed as cancelled."""
+
+
 class ResourceBusyError(DeviceConnectionError):
     """
     Raised when attempting to connect to a resource (e.g. serial port)
@@ -234,8 +238,8 @@ class Driver(ABC):
     # Drivers that send files via the network may not be able to
     # report granular progress updates during the execution of a job.
     reports_granular_progress: bool = False
-    reports_device_status: bool = True
-    confirms_execution_completion: bool = True
+    _reports_device_status: bool = True
+    supports_hold: bool = True
     supports_cancel: bool = True
     uses_gcode: bool = True
     accepts_arc_ops: bool = True
@@ -274,6 +278,31 @@ class Driver(ABC):
         Drivers may override this to provide driver-specific WCS names.
         """
         return ["G54", "G55", "G56", "G57", "G58", "G59"]
+
+    @property
+    def confirms_execution_completion(self) -> bool:
+        """Whether ``run`` waits until device execution has completed."""
+        return getattr(self, "_confirms_execution_completion", True)
+
+    @confirms_execution_completion.setter
+    def confirms_execution_completion(self, value: bool) -> None:
+        self._confirms_execution_completion = value
+
+    @property
+    def reports_device_status(self) -> bool:
+        """Whether device status should participate in application state."""
+        return self._reports_device_status
+
+    @reports_device_status.setter
+    def reports_device_status(self, value: bool) -> None:
+        self._reports_device_status = value
+
+    def get_device_status_label(self, status: DeviceStatus) -> str:
+        return DEVICE_STATUS_LABELS.get(status, _("Unknown"))
+
+    def get_device_status_tooltip(self, status: DeviceStatus) -> str | None:
+        del status
+        return None
 
     @property
     def manual_execution_confirmation_required(self) -> bool:
@@ -562,6 +591,9 @@ class Driver(ABC):
         """
         Sends a command to cancel the currently executing program.
         """
+
+    def notify_cancel_requested(self) -> None:
+        """Record a cancellation request before its task is scheduled."""
 
     def can_home(self, axis: Optional["Axis"] = None) -> bool:
         """

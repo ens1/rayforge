@@ -10,6 +10,8 @@ machine:
     port: ''
     baudrate: 115200
     job_profile: proven
+  driver_config:
+    machine_status_profile: boss-ls2040-da000400-v1
   auto_connect: true
   gcode_precision: 3
   supports_arcs: false

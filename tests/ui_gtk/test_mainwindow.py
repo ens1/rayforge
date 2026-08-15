@@ -28,6 +28,12 @@ gi.require_version("Adw", "1")
 gi.require_version("Gdk", "4.0")
 from gi.repository import Adw, GLib
 
+from rayforge.machine.driver.driver import DeviceState, DeviceStatus
+from rayforge.machine.driver.ruida import RuidaSerialDriver
+from rayforge.machine.driver.ruida.program_driver import (
+    BOSS_LS2040_DA000400_STATUS_PROFILE,
+    RUIDA_MACHINE_STATUS_PROFILE_KEY,
+)
 from rayforge.machine.models.machine import Machine
 from rayforge.machine.transport import TransportStatus
 from rayforge.ui_gtk.mainwindow import MainWindow
@@ -231,6 +237,79 @@ def test_unknown_status_blocks_status_reporting_driver(
     assert not win.action_manager.get_action("execute-macro").get_enabled()
 
 
+def test_unscoped_ruida_unknown_status_preserves_transfer_and_manual_gate(
+    window_with_machine, mocker
+):
+    win, machine = window_with_machine
+    driver = RuidaSerialDriver(machine.context, machine)
+    driver._status_semantics_validated = False
+    mocker.patch.object(machine.controller, "driver", driver)
+    machine.set_connection_status(TransportStatus.CONNECTED)
+    machine.set_device_state(DeviceState(status=DeviceStatus.UNKNOWN))
+    mocker.patch.object(win.doc_editor.doc, "has_result", return_value=True)
+    mocker.patch.object(machine, "can_frame", return_value=True)
+    mocker.patch.object(
+        type(win.doc_editor.pipeline),
+        "is_data_stale",
+        new_callable=PropertyMock,
+        return_value=False,
+    )
+    mocker.patch(
+        "rayforge.ui_gtk.mainwindow.task_mgr.has_tasks", return_value=False
+    )
+
+    win._update_actions_and_ui()
+
+    assert driver.reports_device_status is False
+    assert win.action_manager.get_action("machine-send").get_enabled()
+    assert win.action_manager.get_action("machine-frame").get_enabled()
+
+    driver._execution_unconfirmed = True
+    win._update_actions_and_ui()
+
+    assert win._manual_execution_confirmation_required(machine) is True
+    assert win.action_manager.get_action("machine-send").get_enabled()
+    assert win.toolbar.send_button.get_tooltip_text() == (
+        "Confirm that the controller is idle before reconnecting"
+    )
+
+
+def test_boss_natural_completions_reenable_send_action(
+    window_with_machine, mocker
+):
+    win, machine = window_with_machine
+    driver = RuidaSerialDriver(machine.context, machine)
+    driver.config = {
+        RUIDA_MACHINE_STATUS_PROFILE_KEY: (
+            BOSS_LS2040_DA000400_STATUS_PROFILE
+        ),
+    }
+    mocker.patch.object(machine.controller, "driver", driver)
+    machine.set_connection_status(TransportStatus.CONNECTED)
+    mocker.patch.object(win.doc_editor.doc, "has_result", return_value=True)
+    mocker.patch.object(
+        type(win.doc_editor.pipeline),
+        "is_data_stale",
+        new_callable=PropertyMock,
+        return_value=False,
+    )
+    mocker.patch(
+        "rayforge.ui_gtk.mainwindow.task_mgr.has_tasks", return_value=False
+    )
+
+    for _ in range(2):
+        machine.set_device_state(DeviceState(status=DeviceStatus.RUN))
+        win._update_actions_and_ui()
+        assert not win.action_manager.get_action("machine-send").get_enabled()
+
+        machine.set_device_state(DeviceState(status=DeviceStatus.IDLE))
+        win._update_actions_and_ui()
+        assert win.action_manager.get_action("machine-send").get_enabled()
+        assert win.machine_cmd.execution_confirmation_required(machine) is (
+            False
+        )
+
+
 @pytest.mark.parametrize("response_id", ["cancel", "close"])
 def test_manual_confirmation_dialog_cancel_is_safe(
     window_with_machine, mocker, response_id
@@ -401,6 +480,85 @@ def test_ruida_program_cancel_action_is_available(window_with_machine, mocker):
         win.bottom_panel.jog_widget.cancel_btn.get_action_name()
         == "win.machine-cancel"
     )
+
+
+def test_status_driver_without_hold_does_not_enable_pause(
+    window_with_machine, mocker
+):
+    win, machine = window_with_machine
+    driver = MagicMock()
+    driver.state.error = None
+    driver.reports_device_status = True
+    driver.supports_hold = False
+    driver.supports_cancel = True
+    driver.manual_execution_confirmation_required = False
+    mocker.patch.object(machine.controller, "driver", driver)
+    machine.set_connection_status(TransportStatus.CONNECTED)
+    machine.set_device_state(DeviceState(status=DeviceStatus.RUN))
+    mocker.patch(
+        "rayforge.ui_gtk.mainwindow.task_mgr.has_tasks", return_value=False
+    )
+
+    win._update_actions_and_ui()
+
+    assert not win.action_manager.get_action("machine-hold").get_enabled()
+    assert win.action_manager.get_action("machine-cancel").get_enabled()
+
+
+@pytest.mark.parametrize(
+    ("status", "expected"),
+    [
+        (DeviceStatus.IDLE, False),
+        (DeviceStatus.UNKNOWN, False),
+        (DeviceStatus.RUN, True),
+        (DeviceStatus.HOLD, True),
+        (DeviceStatus.CYCLE, True),
+    ],
+)
+def test_status_driver_cancel_requires_active_program_state(
+    window_with_machine, mocker, status, expected
+):
+    win, machine = window_with_machine
+    driver = MagicMock()
+    driver.state.error = None
+    driver.reports_device_status = True
+    driver.supports_hold = False
+    driver.supports_cancel = True
+    driver.manual_execution_confirmation_required = False
+    mocker.patch.object(machine.controller, "driver", driver)
+    machine.set_connection_status(TransportStatus.CONNECTED)
+    machine.set_device_state(DeviceState(status=status))
+    mocker.patch(
+        "rayforge.ui_gtk.mainwindow.task_mgr.has_tasks", return_value=False
+    )
+
+    win._update_actions_and_ui()
+
+    assert (
+        win.action_manager.get_action("machine-cancel").get_enabled()
+        is expected
+    )
+
+
+def test_pending_cancel_disables_stop_action(window_with_machine, mocker):
+    win, machine = window_with_machine
+    driver = MagicMock()
+    driver.state.error = None
+    driver.reports_device_status = True
+    driver.supports_hold = False
+    driver.supports_cancel = True
+    driver.manual_execution_confirmation_required = False
+    mocker.patch.object(machine.controller, "driver", driver)
+    machine.set_connection_status(TransportStatus.CONNECTED)
+    machine.set_device_state(DeviceState(status=DeviceStatus.RUN))
+    win.machine_cmd._cancel_pending_machine_ids.add(machine.id)
+    mocker.patch(
+        "rayforge.ui_gtk.mainwindow.task_mgr.has_tasks", return_value=False
+    )
+
+    win._update_actions_and_ui()
+
+    assert not win.action_manager.get_action("machine-cancel").get_enabled()
 
 
 def test_transfer_driver_cancel_tracks_submission_or_confirmation(

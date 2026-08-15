@@ -1769,10 +1769,13 @@ class MainWindow(Adw.ApplicationWindow):
             else:
                 self.toolbar.send_button.set_tooltip_text(_("Send to machine"))
 
-            hold_sensitive = device_status in (
-                DeviceStatus.RUN,
-                DeviceStatus.HOLD,
-                DeviceStatus.CYCLE,
+            hold_sensitive = active_driver.supports_hold and (
+                device_status
+                in (
+                    DeviceStatus.RUN,
+                    DeviceStatus.HOLD,
+                    DeviceStatus.CYCLE,
+                )
             )
             is_holding = device_status == DeviceStatus.HOLD
             am.get_action("machine-hold").set_enabled(hold_sensitive)
@@ -1786,17 +1789,28 @@ class MainWindow(Adw.ApplicationWindow):
                 self.toolbar.hold_button.set_child(self.toolbar.hold_off_icon)
                 self.toolbar.hold_button.set_tooltip_text(_("Pause machine"))
 
+            status_allows_cancel = (
+                active_driver.reports_device_status
+                and device_status
+                in (
+                    DeviceStatus.RUN,
+                    DeviceStatus.HOLD,
+                    DeviceStatus.CYCLE,
+                )
+            )
+            submission_allows_cancel = (
+                self._machine_job_submission_pending
+                and self._machine_job_submission_machine_id
+                == active_machine.id
+            )
             cancel_sensitive = (
                 conn_status == TransportStatus.CONNECTED
                 and active_driver.supports_cancel
+                and not self.machine_cmd.cancel_pending(active_machine)
                 and (
-                    active_driver.reports_device_status
+                    status_allows_cancel
                     or confirmation_required
-                    or (
-                        self._machine_job_submission_pending
-                        and self._machine_job_submission_machine_id
-                        == active_machine.id
-                    )
+                    or submission_allows_cancel
                 )
             )
             am.get_action("machine-cancel").set_enabled(cancel_sensitive)

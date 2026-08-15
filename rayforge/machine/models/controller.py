@@ -342,8 +342,8 @@ class MachineController:
             self.machine.set_precheck_error(str(e))
 
         new_driver = driver_cls(self.context, self.machine)
-        new_driver.setup(**requested_args)
         new_driver.config = requested_config
+        new_driver.setup(**requested_args)
 
         if old_driver and not self._active_driver_cleaned:
             try:

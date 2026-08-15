@@ -6,10 +6,7 @@ from blinker import Signal
 from gi.repository import Gio, GObject, Gtk, Pango
 
 from ...context import get_context
-from ...machine.driver.driver import (
-    DEVICE_STATUS_LABELS,
-    DeviceStatus,
-)
+from ...machine.driver.driver import DeviceStatus
 from ...machine.driver.dummy import NoDeviceDriver
 from ...machine.models.machine import Machine
 from ...machine.transport.transport import TransportStatus
@@ -56,7 +53,7 @@ def _get_status_text(
     if is_nodriver:
         return _("No driver")
     status = machine.device_state.status
-    text = DEVICE_STATUS_LABELS.get(status, _("Unknown"))
+    text = machine.driver.get_device_status_label(status)
     if (
         status == DeviceStatus.RUN
         and eta_seconds is not None
@@ -64,6 +61,14 @@ def _get_status_text(
     ):
         text = f"{text} · {format_seconds(eta_seconds)}"
     return text
+
+
+def _get_status_tooltip(machine: Machine) -> str | None:
+    if isinstance(machine.driver, NoDeviceDriver):
+        return None
+    return machine.driver.get_device_status_tooltip(
+        machine.device_state.status
+    )
 
 
 def _get_connection_status(machine: Machine) -> TransportStatus:
@@ -163,6 +168,7 @@ class MachineDropdown(Gtk.DropDown):
         machine = list_item_obj.machine
         name_label.set_text(machine.name)
         status_label.set_text(_get_status_text(machine))
+        status_label.set_tooltip_text(_get_status_tooltip(machine))
 
         conn_status = _get_connection_status(machine)
         icon_name = _get_connection_icon_name(conn_status)
@@ -182,6 +188,7 @@ class MachineDropdown(Gtk.DropDown):
 
         def on_state_changed(m, state, lbl=status_label):
             lbl.set_text(_get_status_text(m, self._get_eta_for_machine(m)))
+            lbl.set_tooltip_text(_get_status_tooltip(m))
 
         def on_conn_changed(m, status, message=None, ibox=icon_box):
             conn = _get_connection_status(m)
@@ -228,6 +235,7 @@ class MachineDropdown(Gtk.DropDown):
         label = self._status_label_refs.get(id(machine))
         if label:
             label.set_text(_get_status_text(machine, eta_seconds))
+            label.set_tooltip_text(_get_status_tooltip(machine))
 
     def update_model_and_selection(self, *args, **kwargs):
         logger.debug("Syncing machine dropdown model and selection.")

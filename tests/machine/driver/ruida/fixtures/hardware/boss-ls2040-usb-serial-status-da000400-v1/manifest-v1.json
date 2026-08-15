@@ -1,0 +1,709 @@
+{
+  "schema": "ruida-re.hardware-machine-status-observation.v1",
+  "identifier": "boss-ls2040-usb-serial-status-da000400-v1",
+  "observed_on": "2026-08-15",
+  "runtime_revisions": {
+    "rayforge_artifact_revision": "b2ec7d0324572b75785c71be3cd48d77511379f6",
+    "ruida_re": "4fa6e0d9e74f9a9ed9f569033ce9286a45dab1e1"
+  },
+  "scope": {
+    "machine": "Boss LS2040",
+    "configured_controller_profile": "Ruida 644XS",
+    "transport": {
+      "kind": "USB serial",
+      "baud": 115200,
+      "magic": 136,
+      "checksum_prefix": false,
+      "separate_acknowledgement": false
+    },
+    "physical_source_inhibited_for_motion_stages": true,
+    "description": "Six supervised captures correlate exact DA000400 replies with idle, natural execution, panel pause and resume, programmed dwell, and D801 software stop on one Boss LS2040 setup.",
+    "limitations": [
+      "The status interpretation is scoped to the exact Boss LS2040 setup and capture date; it is not a generic Ruida status-bit definition.",
+      "Controller firmware identity was not independently captured, so the evidence does not establish behavior for another firmware revision, controller, machine, transport, or UDP.",
+      "Manual panel jogs did not change the returned word; DA000400 therefore does not establish all axis-motion state on this setup.",
+      "The legacy moving, job_running, part_end, and unknown_bits fields are preserved as decoder output only and are not treated as generic completion semantics.",
+      "In particular, legacy part_end is true throughout the observed paused state and must not be interpreted as completion.",
+      "Natural completion requires a same-session idle preflight, successful send, an observed active word, and stable post-active 0x00010600 samples; short jobs whose active state is missed remain unconfirmed.",
+      "The single observed 0x00000000 baseline is not accepted as post-active completion evidence.",
+      "D801 is only a software process-stop command in this evidence. It is not an emergency stop, a safety-rated stop, or a substitute for machine safety controls.",
+      "A stopped job has a cancelled outcome and is not a successful natural completion or machine-hours success.",
+      "Post-stop cancellation requires both at least three consecutive 0x00010600 samples and at least 0.600 seconds elapsed since the first stable sample; sample count alone is insufficient.",
+      "The physical laser source was inhibited during motion stages, so these captures do not establish emission behavior.",
+      "Operator reports were not instrumented metrology and do not establish timing, position, electrical, optical, or safety performance.",
+      "Absolute device paths, device identifiers, host paths, and absolute monotonic clock origins are intentionally omitted from this public fixture.",
+      "The original captures are content-addressed but not reproduced verbatim because they contain private host and device metadata.",
+      "The motion artifacts are content-addressed but are not included in this fixture; their transfer receipts prove host-side transmission, not a controller acknowledgement.",
+      "Unknown DA000400 values remain unknown and must fail closed rather than being inferred from individual bits."
+    ]
+  },
+  "protocol": {
+    "semantic_address": 512,
+    "encoded_address_groups_hex": "0400",
+    "request": {
+      "command": "get_setting",
+      "logical_hex": "da000400",
+      "serial_wire_hex": "d4898d89",
+      "hardware_observed_over_serial": true,
+      "packet_count_per_query": 1,
+      "transmissions_per_query": 1,
+      "retries_per_query": 0
+    },
+    "udp_frame": {
+      "wire_hex": "0273d4898d89",
+      "derivation": "standard two-byte UDP checksum prefix plus the swizzled request",
+      "hardware_observed": false
+    },
+    "reply": {
+      "command": "setting_reply",
+      "logical_length_bytes": 9,
+      "semantic_address": 512,
+      "complete_reply_required": true
+    }
+  },
+  "status_words": [
+    {
+      "raw_word": 0,
+      "raw_hex": "0x00000000",
+      "reply_logical_hex": "da0104000000000000",
+      "reply_serial_wire_hex": "d4098d898989898989",
+      "legacy_decoder_fields": {
+        "moving": false,
+        "job_running": false,
+        "part_end": false,
+        "unknown_bits": 0
+      },
+      "scoped_interpretation": "idle-preflight-only",
+      "observed_contexts": [
+        "stage-a-visible-idle-baseline",
+        "stage-b-manual-panel-jogs",
+        "stage-c-preflight"
+      ]
+    },
+    {
+      "raw_word": 66561,
+      "raw_hex": "0x00010401",
+      "reply_logical_hex": "da0104000000040801",
+      "reply_serial_wire_hex": "d4098d8989898d8109",
+      "legacy_decoder_fields": {
+        "moving": false,
+        "job_running": true,
+        "part_end": false,
+        "unknown_bits": 66560
+      },
+      "scoped_interpretation": "active-running-or-dwell",
+      "observed_contexts": [
+        "stage-c-natural-job",
+        "stage-d-before-pause-and-after-resume",
+        "stage-e-programmed-dwell",
+        "stage-f-before-software-stop"
+      ]
+    },
+    {
+      "raw_word": 66563,
+      "raw_hex": "0x00010403",
+      "reply_logical_hex": "da0104000000040803",
+      "reply_serial_wire_hex": "d4098d8989898d810b",
+      "legacy_decoder_fields": {
+        "moving": false,
+        "job_running": true,
+        "part_end": true,
+        "unknown_bits": 66560
+      },
+      "scoped_interpretation": "active-paused",
+      "observed_contexts": [
+        "stage-d-panel-pause"
+      ]
+    },
+    {
+      "raw_word": 66565,
+      "raw_hex": "0x00010405",
+      "reply_logical_hex": "da0104000000040805",
+      "reply_serial_wire_hex": "d4098d8989898d810d",
+      "legacy_decoder_fields": {
+        "moving": false,
+        "job_running": true,
+        "part_end": false,
+        "unknown_bits": 66564
+      },
+      "scoped_interpretation": "active-finishing-tail",
+      "observed_contexts": [
+        "stage-c-natural-job-tail",
+        "stage-d-resumed-job-tail",
+        "stage-e-programmed-dwell-job-tail"
+      ]
+    },
+    {
+      "raw_word": 67072,
+      "raw_hex": "0x00010600",
+      "reply_logical_hex": "da0104000000040c00",
+      "reply_serial_wire_hex": "d4098d8989898d8589",
+      "legacy_decoder_fields": {
+        "moving": false,
+        "job_running": false,
+        "part_end": false,
+        "unknown_bits": 67072
+      },
+      "scoped_interpretation": "idle-or-post-active-terminal",
+      "observed_contexts": [
+        "stage-c-natural-completion",
+        "stage-d-preflight-and-natural-completion",
+        "stage-e-preflight-and-natural-completion",
+        "stage-f-preflight-and-cancelled-after-stop"
+      ]
+    },
+    {
+      "raw_word": 4260867,
+      "raw_hex": "0x00410403",
+      "reply_logical_hex": "da0104000002040803",
+      "reply_serial_wire_hex": "d4098d89898b8d810b",
+      "legacy_decoder_fields": {
+        "moving": false,
+        "job_running": true,
+        "part_end": true,
+        "unknown_bits": 4260864
+      },
+      "scoped_interpretation": "active-pause-transition",
+      "observed_contexts": [
+        "stage-d-panel-pause-transition"
+      ]
+    },
+    {
+      "raw_word": 8586241,
+      "raw_hex": "0x00830401",
+      "reply_logical_hex": "da01040000040c0801",
+      "reply_serial_wire_hex": "d4098d89898d858109",
+      "legacy_decoder_fields": {
+        "moving": false,
+        "job_running": true,
+        "part_end": false,
+        "unknown_bits": 8586240
+      },
+      "scoped_interpretation": "active-resume-transition",
+      "observed_contexts": [
+        "stage-d-panel-resume-transition"
+      ]
+    },
+    {
+      "raw_word": 5309952,
+      "raw_hex": "0x00510600",
+      "reply_logical_hex": "da0104000002440c00",
+      "reply_serial_wire_hex": "d4098d89898bcd8589",
+      "legacy_decoder_fields": {
+        "moving": false,
+        "job_running": false,
+        "part_end": false,
+        "unknown_bits": 5309952
+      },
+      "scoped_interpretation": "software-stop-transition-nonterminal",
+      "observed_contexts": [
+        "stage-f-d801-stop-transition"
+      ]
+    }
+  ],
+  "artifacts": {
+    "long_travel": {
+      "file_basename": "boss-ls2040-stage-c-anchor15-travel2525-x20-130-y55-70-b2ec7d03.rd",
+      "included_in_fixture": false,
+      "sha256": "c43631b61b6a7f9d0f05f3bf794b13de858490102bbcb42516bf444f16fc554f",
+      "size_bytes": 745,
+      "file_checksum": 32080,
+      "records": 93,
+      "process": {
+        "positive_power_anchor_length_mm": 5.0,
+        "requested_anchor_power_percent": 15.0,
+        "dark_travel_segments": 23,
+        "dark_travel_total_mm": 2525.1,
+        "controller_bounds_mm": {
+          "min_x": 20.0,
+          "min_y": 55.0,
+          "max_x": 130.0,
+          "max_y": 70.0
+        },
+        "final_position_mm": [
+          130.0,
+          63.0
+        ]
+      }
+    },
+    "programmed_dwell": {
+      "file_basename": "boss-ls2040-stage-e-50x100ms-x125-128-y72-source-off-required-b2ec7d03.rd",
+      "included_in_fixture": false,
+      "sha256": "f5d449e9138638e2137917b3a47685061570ef513ddb5d3a645a79345a3dd9c5",
+      "size_bytes": 1403,
+      "file_checksum": 55228,
+      "records": 171,
+      "process": {
+        "positive_power_anchor_length_mm": 1.0,
+        "requested_anchor_power_percent": 15.0,
+        "additional_delay_records": 50,
+        "additional_delay_each_ms": 100,
+        "programmed_stationary_dwell_seconds": 5.0,
+        "zero_distance_travel_records_between_delays": 49,
+        "controller_bounds_mm": {
+          "min_x": 125.0,
+          "min_y": 72.0,
+          "max_x": 128.0,
+          "max_y": 72.0
+        }
+      }
+    }
+  },
+  "captures": {
+    "stage_a_idle_baseline": {
+      "source_schema": "ruida-re.status-baseline-capture.v1",
+      "provenance": {
+        "pre_annotation_sha256": null,
+        "pre_annotation_hash_availability": "not-recorded",
+        "final_capture_sha256": "5392b8280b0d2f6d40bcdef4745f1bc464f296599157726784e964be5d3d841f"
+      },
+      "duration_seconds": 3.216480208,
+      "sample_count": 17,
+      "error_count": 0,
+      "runs": [
+        {
+          "raw_word": 0,
+          "count": 17,
+          "first_sample_relative_seconds": 0.006926458,
+          "last_sample_relative_seconds": 3.214607667,
+          "sample_span_seconds": 3.207681209
+        }
+      ],
+      "receipt": {
+        "status_query_count": 17,
+        "transmissions_per_query": 1,
+        "retries": 0,
+        "complete_correlated_replies": 17
+      },
+      "operator_preconditions": {
+        "operator_present": true,
+        "controller_visibly_idle": true,
+        "source_physical_off": true,
+        "route_clear": true,
+        "rayforge_closed": true,
+        "lightburn_closed": true
+      },
+      "operator_quotes": [
+        "No, nothing happened"
+      ],
+      "conclusion": "0x00000000 correlates with this visibly idle baseline only"
+    },
+    "stage_b_manual_panel_jogs": {
+      "source_schema": "ruida-re.status-panel-jog-capture.v1",
+      "provenance": {
+        "pre_annotation_sha256": null,
+        "pre_annotation_hash_availability": "not-recorded",
+        "final_capture_sha256": "125f61ec378e213e2e819de1de57bf9ad9b07511d111c355b8c40fbc75c94f3f"
+      },
+      "duration_seconds": 20.008181084,
+      "sample_count": 101,
+      "error_count": 0,
+      "runs": [
+        {
+          "raw_word": 0,
+          "count": 101,
+          "first_sample_relative_seconds": 0.014753709,
+          "last_sample_relative_seconds": 20.008160292,
+          "sample_span_seconds": 19.993406583
+        }
+      ],
+      "receipt": {
+        "status_query_count": 101,
+        "transmissions_per_query": 1,
+        "retries": 0,
+        "complete_correlated_replies": 101
+      },
+      "operator_observation": {
+        "manual_panel_jogs_observed": true,
+        "jog_count_approximate": 10,
+        "each_jog_duration_seconds": "less-than-3",
+        "unexpected_behavior_observed": false
+      },
+      "operator_quotes": [
+        "I had to move for less than 3 seconds, my rapid speed is too high to do that consistentyl",
+        "Several jogs happened, maybe 10",
+        "No emission, alarm, change or unexpected behavior"
+      ],
+      "conclusion": "DA000400 did not report these repeated manual panel jogs"
+    },
+    "stage_c_natural_job": {
+      "source_schema": "ruida-status-stage-c-capture-v1",
+      "provenance": {
+        "pre_annotation_sha256": "0e5de1b40848985b6ebd43834d1e5a40fc8cdd4d233e5b5fb88d3a224ab0751f",
+        "final_capture_sha256": "4fd85aab652a92aba086811f56cb476081b4332e80794d2b13d9c4f431734ff0"
+      },
+      "artifact": "long_travel",
+      "duration_seconds": 27.912587666,
+      "sample_count": 141,
+      "error_count": 0,
+      "runs": [
+        {
+          "raw_word": 0,
+          "count": 16,
+          "first_sample_relative_seconds": 0.019747833,
+          "last_sample_relative_seconds": 3.019405583,
+          "sample_span_seconds": 2.99965775
+        },
+        {
+          "raw_word": 66561,
+          "count": 71,
+          "first_sample_relative_seconds": 3.099900833,
+          "last_sample_relative_seconds": 17.110496916,
+          "sample_span_seconds": 14.010596083
+        },
+        {
+          "raw_word": 66565,
+          "count": 5,
+          "first_sample_relative_seconds": 17.316248,
+          "last_sample_relative_seconds": 18.114005083,
+          "sample_span_seconds": 0.797757083
+        },
+        {
+          "raw_word": 67072,
+          "count": 49,
+          "first_sample_relative_seconds": 18.305430166,
+          "last_sample_relative_seconds": 27.911105,
+          "sample_span_seconds": 9.605674834
+        }
+      ],
+      "receipt": {
+        "job_submissions": 1,
+        "packet_count": 1,
+        "transmissions": 1,
+        "retries": 0,
+        "completed_packets": 1,
+        "packet_sha256": "c43631b61b6a7f9d0f05f3bf794b13de858490102bbcb42516bf444f16fc554f",
+        "send_attempt_relative_seconds": 3.019419583,
+        "send_return_relative_seconds": 3.098413875
+      },
+      "operator_quotes": [
+        "That's all correct, source is off, everything else is operable",
+        "Route is clear",
+        "Approved",
+        "Motion started, stopped, head is near there, no issues or expected duration. Total motion was maybe 10s?"
+      ],
+      "conclusion": "natural active-tail-idle sequence observed for this exact job"
+    },
+    "stage_d_panel_pause_resume": {
+      "source_schema": "ruida-status-stage-d-pause-capture-v1",
+      "provenance": {
+        "pre_annotation_sha256": "8d871a48866055dc67fbaaebbaf21533e18ec8f522c74f7292a07a21cae0e2e4",
+        "final_capture_sha256": "2ea9865a474249d42fcfe0e6257831941690897551855c3f0b23d0b4cbf305ba"
+      },
+      "artifact": "long_travel",
+      "duration_seconds": 93.33443925,
+      "sample_count": 468,
+      "error_count": 0,
+      "runs": [
+        {
+          "raw_word": 67072,
+          "count": 17,
+          "first_sample_relative_seconds": 0.020332167,
+          "last_sample_relative_seconds": 3.22788175,
+          "sample_span_seconds": 3.207549583
+        },
+        {
+          "raw_word": 66561,
+          "count": 10,
+          "first_sample_relative_seconds": 3.323203958,
+          "last_sample_relative_seconds": 5.126555625,
+          "sample_span_seconds": 1.803351667
+        },
+        {
+          "raw_word": 4260867,
+          "count": 1,
+          "first_sample_relative_seconds": 5.318398042,
+          "last_sample_relative_seconds": 5.318398042,
+          "sample_span_seconds": 0.0
+        },
+        {
+          "raw_word": 66563,
+          "count": 191,
+          "first_sample_relative_seconds": 5.525268833,
+          "last_sample_relative_seconds": 43.53369675,
+          "sample_span_seconds": 38.008427917
+        },
+        {
+          "raw_word": 8586241,
+          "count": 1,
+          "first_sample_relative_seconds": 43.724930292,
+          "last_sample_relative_seconds": 43.724930292,
+          "sample_span_seconds": 0.0
+        },
+        {
+          "raw_word": 66561,
+          "count": 52,
+          "first_sample_relative_seconds": 43.932098875,
+          "last_sample_relative_seconds": 54.128250125,
+          "sample_span_seconds": 10.19615125
+        },
+        {
+          "raw_word": 66565,
+          "count": 6,
+          "first_sample_relative_seconds": 54.319558,
+          "last_sample_relative_seconds": 55.324866833,
+          "sample_span_seconds": 1.005308833
+        },
+        {
+          "raw_word": 67072,
+          "count": 190,
+          "first_sample_relative_seconds": 55.532764583,
+          "last_sample_relative_seconds": 93.332870208,
+          "sample_span_seconds": 37.800105625
+        }
+      ],
+      "receipt": {
+        "job_submissions": 1,
+        "packet_count": 1,
+        "transmissions": 1,
+        "retries": 0,
+        "completed_packets": 1,
+        "packet_equals_artifact": true,
+        "packet_sha256": "c43631b61b6a7f9d0f05f3bf794b13de858490102bbcb42516bf444f16fc554f",
+        "send_attempt_relative_seconds": 3.2280145,
+        "send_return_relative_seconds": 3.31167975
+      },
+      "operator_marker_timestamps": {
+        "capture_monotonic_correlation_available": false,
+        "reason": "stdin marker channel was unavailable"
+      },
+      "operator_quotes": [
+        "All clear, proceed",
+        "paused",
+        "paused",
+        "resumed",
+        "Yes, and no issues"
+      ],
+      "conclusion": "panel pause is active and distinct from completion for this run"
+    },
+    "stage_e_programmed_dwell": {
+      "source_schema": "ruida-status-stage-e-dwell-capture-v1",
+      "provenance": {
+        "pre_annotation_sha256": "edf552386cc034ef617d4c9960a8711c448bd72b4b4b57857aebc03da9fa82d9",
+        "final_capture_sha256": "ccd681300a347bd035f0ff1333b92de865359a3b1adc8907bf776fdd4a044065"
+      },
+      "artifact": "programmed_dwell",
+      "duration_seconds": 18.192759833,
+      "sample_count": 92,
+      "error_count": 0,
+      "runs": [
+        {
+          "raw_word": 67072,
+          "count": 16,
+          "first_sample_relative_seconds": 0.017091833,
+          "last_sample_relative_seconds": 3.017222458,
+          "sample_span_seconds": 3.000130625
+        },
+        {
+          "raw_word": 66561,
+          "count": 27,
+          "first_sample_relative_seconds": 3.176619791,
+          "last_sample_relative_seconds": 8.394321416,
+          "sample_span_seconds": 5.217701625
+        },
+        {
+          "raw_word": 66565,
+          "count": 5,
+          "first_sample_relative_seconds": 8.585571083,
+          "last_sample_relative_seconds": 9.383865166,
+          "sample_span_seconds": 0.798294083
+        },
+        {
+          "raw_word": 67072,
+          "count": 44,
+          "first_sample_relative_seconds": 9.590888083,
+          "last_sample_relative_seconds": 18.191311166,
+          "sample_span_seconds": 8.600423083
+        }
+      ],
+      "receipt": {
+        "job_submissions": 1,
+        "packet_count": 2,
+        "packet_lengths": [
+          1024,
+          379
+        ],
+        "transmissions": 2,
+        "retries": 0,
+        "completed_packets": 2,
+        "packets_concatenated_equal_artifact": true,
+        "packets_concatenated_sha256": "f5d449e9138638e2137917b3a47685061570ef513ddb5d3a645a79345a3dd9c5",
+        "packet_sha256": [
+          "11f8b1e3a2300676fa8b0ee1b6b832babf6446bd850049e352091545f8dd34e7",
+          "5dd8ed26e6d5aedabf2b461ccb88578c6b5e83240749fdbae29825e0d0db256a"
+        ],
+        "send_attempt_relative_seconds": 3.01728075,
+        "send_return_relative_seconds": 3.173881458
+      },
+      "split_reply_observations": [
+        {
+          "raw_word": 66561,
+          "logical_fragments_hex": [
+            "da010400000004",
+            "0801"
+          ],
+          "serial_wire_fragments_hex": [
+            "d4098d8989898d",
+            "8109"
+          ]
+        },
+        {
+          "raw_word": 67072,
+          "logical_fragments_hex": [
+            "da01",
+            "04000000040c00"
+          ],
+          "serial_wire_fragments_hex": [
+            "d409",
+            "8d8989898d8589"
+          ]
+        }
+      ],
+      "operator_quotes": [
+        "Confirmed, proceed",
+        "Yes, everything looks right"
+      ],
+      "conclusion": "0x00010401 remained active across the complete programmed five-second dwell"
+    },
+    "stage_f_software_stop": {
+      "source_schema": "ruida-status-stage-f-stop-capture-v1",
+      "provenance": {
+        "pre_annotation_sha256": "6d89468e1961ab8d808502e4e4baa3ad86f66412ab9d0410a0ffedc78e4f88cd",
+        "final_capture_sha256": "90b97c90ad9f3716ce721b6fedb3f8151f225d9d0fce1bd0a15da3a65663b738"
+      },
+      "artifact": "long_travel",
+      "duration_seconds": 27.920135292,
+      "sample_count": 141,
+      "error_count": 0,
+      "runs": [
+        {
+          "raw_word": 67072,
+          "count": 16,
+          "first_sample_relative_seconds": 0.009700292,
+          "last_sample_relative_seconds": 3.024865708,
+          "sample_span_seconds": 3.015165416
+        },
+        {
+          "raw_word": 66561,
+          "count": 10,
+          "first_sample_relative_seconds": 3.12072025,
+          "last_sample_relative_seconds": 4.92427675,
+          "sample_span_seconds": 1.8035565
+        },
+        {
+          "raw_word": 5309952,
+          "count": 1,
+          "first_sample_relative_seconds": 5.578251167,
+          "last_sample_relative_seconds": 5.578251167,
+          "sample_span_seconds": 0.0
+        },
+        {
+          "raw_word": 67072,
+          "count": 114,
+          "first_sample_relative_seconds": 5.594073542,
+          "last_sample_relative_seconds": 27.91738125,
+          "sample_span_seconds": 22.323307708
+        }
+      ],
+      "job_receipt": {
+        "job_submissions": 1,
+        "packet_count": 1,
+        "transmissions": 1,
+        "retries": 0,
+        "completed_packets": 1,
+        "packet_equals_artifact": true,
+        "packet_sha256": "c43631b61b6a7f9d0f05f3bf794b13de858490102bbcb42516bf444f16fc554f",
+        "send_attempt_relative_seconds": 3.024877333,
+        "send_return_relative_seconds": 3.104845875
+      },
+      "stop_receipt": {
+        "command": "stop_process",
+        "logical_hex": "d801",
+        "serial_wire_hex": "d209",
+        "packet_sha256": "8b37fd3ebbe6396a89ed8563dd0cc55927ac90138950460c77cffeb55cf63810",
+        "packet_count": 1,
+        "transmissions": 1,
+        "retries": 0,
+        "completed_packets": 1,
+        "stop_attempt_relative_seconds": 4.92429675,
+        "stop_return_relative_seconds": 4.925718417
+      },
+      "post_stop_status_observation": {
+        "first_query_start_relative_seconds": 5.109621458,
+        "first_query_end_relative_seconds": 5.578251167,
+        "first_query_response_latency_seconds": 0.468629709,
+        "first_query_raw_word": 5309952,
+        "first_stable_word": 67072,
+        "first_stable_sample_relative_seconds": 5.594073542,
+        "third_consecutive_stable_sample_relative_seconds": 5.721740292,
+        "third_sample_stable_elapsed_seconds": 0.12766675,
+        "first_sample_satisfying_both_gates_index_within_stable_run": 6,
+        "first_sample_satisfying_both_gates_relative_seconds": 6.312107417,
+        "first_sample_satisfying_both_gates_stable_elapsed_seconds": 0.718033875
+      },
+      "operator_quotes": [
+        "Proceed",
+        "Everything looked as expected"
+      ],
+      "conclusion": "D801 software stop transitioned this active run through 0x00510600 to stable 0x00010600"
+    }
+  },
+  "boss_status_profile": {
+    "profile_id": "boss-ls2040-da000400-v1",
+    "scope": "opt-in Boss LS2040 profile supported by this exact evidence only",
+    "preflight_idle_words": [
+      0,
+      67072
+    ],
+    "active_or_noncomplete_words": [
+      66561,
+      66563,
+      66565,
+      4260867,
+      8586241,
+      5309952
+    ],
+    "paused_words": [
+      66563
+    ],
+    "post_active_completion_word": 67072,
+    "post_active_zero_is_completion": false,
+    "unknown_word_policy": "fail-closed-unconfirmed",
+    "natural_completion_rule": {
+      "same_client_session_required": true,
+      "preflight_idle_required": true,
+      "successful_send_required": true,
+      "observed_active_word_required": true,
+      "stable_post_active_word": 67072,
+      "minimum_consecutive_stable_samples": 3,
+      "missed_active_short_job_outcome": "manual-confirmation-required"
+    },
+    "software_stop_rule": {
+      "command_logical_hex": "d801",
+      "command_serial_wire_hex": "d209",
+      "stable_terminal_word": 67072,
+      "minimum_consecutive_stable_samples": 3,
+      "minimum_stable_elapsed_seconds": 0.6,
+      "stability_requirements_combination": "all-required",
+      "minimum_controller_query_budget_seconds": 1.0,
+      "outcome": "cancelled",
+      "counts_as_natural_completion": false,
+      "counts_as_machine_hours_success": false,
+      "is_emergency_stop": false,
+      "terminology": "software process stop"
+    }
+  },
+  "result": {
+    "status": "scoped-boss-ls2040-da000400-status-profile-supported",
+    "natural_completion": "active-then-stable-0x00010600-observed",
+    "pause": "active-and-distinct-from-completion",
+    "programmed_dwell": "active-and-distinct-from-completion",
+    "software_stop": "cancelled-after-stable-0x00010600",
+    "manual_panel_jog_reporting": "not-observed",
+    "generic_ruida_bit_semantics": "not-established",
+    "generic_part_end_completion_semantics": "contradicted-by-paused-observation",
+    "udp_transport": "not-tested",
+    "emergency_stop": "not-tested-and-not-claimed",
+    "safety_rating": "not-established"
+  }
+}

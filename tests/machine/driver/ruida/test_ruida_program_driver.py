@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import threading
+from dataclasses import dataclass
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -11,9 +12,14 @@ from rayforge.machine.driver.driver import (
     DeviceConnectionError,
     DeviceStatus,
     ExecutionCompletionUnknownError,
+    JobCancelledError,
 )
 from rayforge.machine.driver.ruida import program_driver
-from rayforge.machine.driver.ruida.program_driver import RuidaProgramDriver
+from rayforge.machine.driver.ruida.program_driver import (
+    BOSS_LS2040_DA000400_STATUS_PROFILE,
+    RUIDA_MACHINE_STATUS_PROFILE_KEY,
+    RuidaProgramDriver,
+)
 from rayforge.machine.driver.ruida.ruida_serial_driver import (
     RuidaSerialDriver,
 )
@@ -39,12 +45,22 @@ class FakeUdpTransport:
         self.local_port = local_port
 
 
+class UnexpectedStatusFailure(Exception):
+    pass
+
+
+@dataclass(frozen=True)
+class FakeHandshakeProfile:
+    max_retries: int = 3
+
+
 class MemorySerialTransport:
     kind = "serial"
 
     def __init__(self):
         self.is_open = False
         self.sent = []
+        self.responses = []
 
     def open(self):
         self.is_open = True
@@ -54,9 +70,14 @@ class MemorySerialTransport:
 
     def send(self, data):
         self.sent.append(data)
+        if data == bytes.fromhex("d4898d89"):
+            self.responses.append(bytes.fromhex("d4098d898989898989"))
 
     def receive(self, timeout):
         del timeout
+        if self.responses:
+            return self.responses.pop(0)
+        return None
 
     def drain(self, limit=256):
         del limit
@@ -92,6 +113,23 @@ class FakeCodec:
         return self.payload
 
 
+def machine_status(
+    raw_word=0,
+    *,
+    moving=False,
+    job_running=False,
+    part_end=False,
+    unknown_bits=0,
+):
+    return SimpleNamespace(
+        raw_word=raw_word,
+        moving=moving,
+        job_running=job_running,
+        part_end=part_end,
+        unknown_bits=unknown_bits,
+    )
+
+
 class FakeControllerClient:
     def __init__(self, transport):
         self.transport = transport
@@ -103,9 +141,17 @@ class FakeControllerClient:
         self.close_error: Exception | None = None
         self.close_before_error = False
         self.send_error: Exception | None = None
+        self.status_error: Exception | None = None
+        self.status_responses = []
+        self.status_reads = 0
+        self.default_status_response = machine_status()
+        self.auto_status_after_send = True
+        self.auto_status_after_stop = True
         self.sent_programs = []
         self.stop_calls = 0
+        self.stop_retry_limits = []
         self.events = []
+        self.handshake_profile = FakeHandshakeProfile()
         self.open_started: threading.Event | None = None
         self.open_release: threading.Event | None = None
         self.close_started: threading.Event | None = None
@@ -114,8 +160,15 @@ class FakeControllerClient:
         self.send_release: threading.Event | None = None
         self.receipt = SimpleNamespace(
             completed_packets=2,
+            transmissions=2,
             retries=0,
             packets=(b"one", b"two"),
+        )
+        self.stop_receipt = SimpleNamespace(
+            completed_packets=1,
+            transmissions=1,
+            retries=0,
+            packets=(bytes.fromhex("d209"),),
         )
 
     def open(self, *, probe):
@@ -152,18 +205,56 @@ class FakeControllerClient:
         if self.send_error is not None:
             raise self.send_error
         self.sent_programs.append(program)
+        if self.auto_status_after_send:
+            self.status_responses.extend(
+                [
+                    machine_status(
+                        0x10401,
+                        moving=True,
+                        job_running=True,
+                    ),
+                    machine_status(0x10600),
+                    machine_status(0x10600),
+                    machine_status(0x10600),
+                ]
+            )
         self.events.append("send-complete")
         return self.receipt
 
     def stop_process(self):
         self.stop_calls += 1
+        self.stop_retry_limits.append(self.handshake_profile.max_retries)
         if self.send_error is not None:
             raise self.send_error
-        return self.receipt
+        if self.auto_status_after_stop:
+            self.status_responses.extend(
+                [
+                    machine_status(0x510600),
+                    machine_status(0x10600),
+                    machine_status(0x10600),
+                    machine_status(0x10600),
+                    machine_status(0x10600),
+                    machine_status(0x10600),
+                ]
+            )
+        return self.stop_receipt
+
+    def read_machine_status(self):
+        self.status_reads += 1
+        if self.status_error is not None:
+            raise self.status_error
+        if self.status_responses:
+            return self.status_responses.pop(0)
+        return self.default_status_response
 
 
 @pytest.fixture
 def fake_api(monkeypatch):
+    monkeypatch.setattr(
+        RuidaProgramDriver,
+        "_status_semantics_validated",
+        True,
+    )
     codec = FakeCodec()
     clients = []
     api = SimpleNamespace(
@@ -210,6 +301,25 @@ def make_output(payload=b"complete-rd", warnings=()):
     )
 
 
+def compile_real_program(ruida_re):
+    plan = ruida_re.JobPlan(
+        layers=(
+            ruida_re.LayerPlan(
+                index=0,
+                kind="vector",
+                speed_mm_s=10.0,
+                min_power_percent=10.0,
+                max_power_percent=10.0,
+                events=(
+                    ruida_re.TravelTo(1.0, 1.0),
+                    ruida_re.MarkTo(2.0, 2.0),
+                ),
+            ),
+        )
+    )
+    return ruida_re.RuidaJobCompiler().compile(plan).encode_rd()
+
+
 def client_for(driver: RuidaProgramDriver) -> FakeControllerClient:
     client = driver._client
     assert isinstance(client, FakeControllerClient)
@@ -219,6 +329,12 @@ def client_for(driver: RuidaProgramDriver) -> FakeControllerClient:
 async def wait_for_tasks(task_mgr):
     settled = await asyncio.to_thread(task_mgr.wait_until_settled, 2000)
     assert settled
+
+
+async def wait_until(predicate, timeout=1.0):
+    async with asyncio.timeout(timeout):
+        while not predicate():
+            await asyncio.sleep(0.005)
 
 
 def test_program_drivers_are_registered():
@@ -271,30 +387,63 @@ def test_program_setup_requires_stop_process_api(fake_api, driver_objects):
     assert driver._transport is None
 
 
+def test_program_setup_requires_machine_status_api(fake_api, driver_objects):
+    api, _codec = fake_api
+    create_client = api.ControllerClient
+
+    def create_client_without_status(transport):
+        client = create_client(transport)
+        client.read_machine_status = None
+        return client
+
+    api.ControllerClient = create_client_without_status
+    context, machine = driver_objects
+    driver = RuidaSerialDriver(context, machine)
+
+    driver.setup(port="/dev/cu.ruida", baudrate=115200)
+
+    assert driver.state.error is not None
+    assert driver.state.error.title == (
+        "Installed ruida-re lacks required API: "
+        "ControllerClient.read_machine_status"
+    )
+    assert driver._transport is None
+
+
+def test_unscoped_program_setup_does_not_require_machine_status_api(
+    fake_api, driver_objects
+):
+    api, _codec = fake_api
+    create_client = api.ControllerClient
+
+    def create_client_without_status(transport):
+        client = create_client(transport)
+        client.read_machine_status = None
+        return client
+
+    api.ControllerClient = create_client_without_status
+    context, machine = driver_objects
+    driver = RuidaSerialDriver(context, machine)
+    driver._status_semantics_validated = False
+
+    driver.setup(port="/dev/cu.ruida", baudrate=115200)
+
+    assert driver.state.error is None
+    assert driver._transport is not None
+
+
 @pytest.mark.asyncio
 async def test_accepts_complete_rd_from_real_compiler(
     monkeypatch, driver_objects
 ):
     ruida_re = pytest.importorskip("ruida_re")
-    plan = ruida_re.JobPlan(
-        layers=(
-            ruida_re.LayerPlan(
-                index=0,
-                kind="vector",
-                speed_mm_s=10.0,
-                min_power_percent=10.0,
-                max_power_percent=10.0,
-                events=(
-                    ruida_re.TravelTo(1.0, 1.0),
-                    ruida_re.MarkTo(2.0, 2.0),
-                ),
-            ),
-        )
-    )
-    payload = ruida_re.RuidaJobCompiler().compile(plan).encode_rd()
+    if not hasattr(ruida_re.ControllerClient, "read_machine_status"):
+        pytest.skip("installed ruida-re predates machine status support")
+    payload = compile_real_program(ruida_re)
     monkeypatch.setattr(program_driver, "_load_ruida_re", lambda: ruida_re)
     context, machine = driver_objects
     driver = RuidaSerialDriver(context, machine)
+    driver._status_semantics_validated = True
     transport = MemorySerialTransport()
     client = ruida_re.ControllerClient(transport)
     client.open(probe=False)
@@ -307,7 +456,33 @@ async def test_accepts_complete_rd_from_real_compiler(
         MagicMock(),
     )
 
+    program_writes = [
+        data for data in transport.sent if data != bytes.fromhex("d4898d89")
+    ]
+    assert b"".join(program_writes) == payload
+
+
+@pytest.mark.asyncio
+async def test_unscoped_transfer_writes_no_machine_status_request(
+    monkeypatch, driver_objects
+):
+    ruida_re = pytest.importorskip("ruida_re")
+    payload = compile_real_program(ruida_re)
+    monkeypatch.setattr(program_driver, "_load_ruida_re", lambda: ruida_re)
+    context, machine = driver_objects
+    driver = RuidaSerialDriver(context, machine)
+    driver._status_semantics_validated = False
+    transport = MemorySerialTransport()
+    client = ruida_re.ControllerClient(transport)
+    client.open(probe=False)
+    driver._transport = transport
+    driver._client = client
+
+    await driver.run(make_output(payload), MagicMock(), MagicMock())
+
+    assert bytes.fromhex("d4898d89") not in transport.sent
     assert b"".join(transport.sent) == payload
+    assert driver.manual_execution_confirmation_required is True
 
 
 @pytest.mark.asyncio
@@ -339,8 +514,834 @@ async def test_serial_connects_without_probe(fake_api, driver_objects):
         TransportStatus.CONNECTING,
         TransportStatus.CONNECTED,
     ]
-    assert states == [DeviceStatus.UNKNOWN, DeviceStatus.UNKNOWN]
+    assert states == [DeviceStatus.IDLE]
 
+    await driver.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_connect_publishes_fresh_immutable_active_state(
+    fake_api, driver_objects
+):
+    context, machine = driver_objects
+    driver = RuidaSerialDriver(context, machine)
+    initial_state = driver.state
+    driver.setup(port="/dev/cu.ruida", baudrate=115200)
+    client = client_for(driver)
+    client.status_responses.append(
+        machine_status(
+            0x10401,
+            moving=True,
+            job_running=True,
+        )
+    )
+
+    await driver.connect()
+
+    assert initial_state.status == DeviceStatus.UNKNOWN
+    assert driver.state is not initial_state
+    assert driver.state.status == DeviceStatus.RUN
+    assert driver.manual_execution_confirmation_required is False
+    await driver.cleanup()
+
+
+@pytest.mark.parametrize(
+    ("raw_word", "expected"),
+    (
+        (0, DeviceStatus.IDLE),
+        (0x10600, DeviceStatus.IDLE),
+        (0x10401, DeviceStatus.RUN),
+        (0x10403, DeviceStatus.HOLD),
+        (0x10405, DeviceStatus.RUN),
+        (0x410403, DeviceStatus.RUN),
+        (0x830401, DeviceStatus.RUN),
+        (0x510600, DeviceStatus.RUN),
+        (0x10400, DeviceStatus.UNKNOWN),
+        (0x10601, DeviceStatus.UNKNOWN),
+    ),
+)
+def test_boss_profile_maps_only_validated_exact_status_words(
+    fake_api,
+    driver_objects,
+    raw_word,
+    expected,
+):
+    context, machine = driver_objects
+    driver = RuidaSerialDriver(context, machine)
+    driver._status_semantics_validated = False
+    driver.config = {
+        RUIDA_MACHINE_STATUS_PROFILE_KEY: (BOSS_LS2040_DA000400_STATUS_PROFILE)
+    }
+
+    result = driver._publish_machine_status(
+        machine_status(raw_word, unknown_bits=raw_word)
+    )
+
+    assert result == expected
+    assert driver.state.status == expected
+    assert driver.reports_device_status is True
+    assert driver.confirms_execution_completion is True
+
+
+def test_generic_ruida_does_not_interpret_validated_boss_word(
+    fake_api,
+    driver_objects,
+):
+    context, machine = driver_objects
+    driver = RuidaSerialDriver(context, machine)
+    driver._status_semantics_validated = False
+    driver.config = {}
+
+    result = driver._publish_machine_status(machine_status(0x10401))
+
+    assert result == DeviceStatus.UNKNOWN
+    assert driver.reports_device_status is False
+    assert driver.confirms_execution_completion is False
+
+
+def test_completion_capability_override_cannot_bypass_profile_scope(
+    fake_api,
+    driver_objects,
+):
+    context, machine = driver_objects
+    driver = RuidaSerialDriver(context, machine)
+
+    driver.confirms_execution_completion = True
+
+    assert driver.confirms_execution_completion is False
+
+    driver.config = {
+        RUIDA_MACHINE_STATUS_PROFILE_KEY: (BOSS_LS2040_DA000400_STATUS_PROFILE)
+    }
+    assert driver.confirms_execution_completion is True
+
+    driver.confirms_execution_completion = False
+
+    assert driver.confirms_execution_completion is False
+
+
+@pytest.mark.asyncio
+async def test_boss_status_marker_does_not_enable_udp(
+    fake_api,
+    driver_objects,
+):
+    context, machine = driver_objects
+    driver = RuidaUdpProgramDriver(context, machine)
+    driver._status_semantics_validated = False
+    driver.config = {
+        RUIDA_MACHINE_STATUS_PROFILE_KEY: (BOSS_LS2040_DA000400_STATUS_PROFILE)
+    }
+    driver.setup(host="192.0.2.10", port=50200, local_port=40200)
+
+    await driver.connect()
+    client = client_for(driver)
+    await driver.run(make_output(), MagicMock(), MagicMock())
+
+    assert driver.state.status == DeviceStatus.UNKNOWN
+    assert driver.reports_device_status is False
+    assert driver.confirms_execution_completion is False
+    assert client.status_reads == 0
+    assert client.sent_programs
+    assert driver.manual_execution_confirmation_required is True
+    await driver.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_unvalidated_status_words_remain_transfer_only_and_unknown(
+    fake_api, driver_objects
+):
+    context, machine = driver_objects
+    driver = RuidaSerialDriver(context, machine)
+    driver._status_semantics_validated = False
+    driver.STATUS_POLL_INTERVAL = 0.005
+    driver.setup(port="/dev/cu.ruida", baudrate=115200)
+
+    await driver.connect()
+    client = client_for(driver)
+    assert driver.state.status == DeviceStatus.UNKNOWN
+    await asyncio.sleep(0.02)
+
+    assert driver.state.status == DeviceStatus.UNKNOWN
+    assert client.status_reads == 0
+    assert driver._last_raw_status_word is None
+    assert driver.manual_execution_confirmation_required is False
+    driver._execution_completion_monitoring_enabled = True
+    assert driver._can_confirm_execution is False
+    assert driver.confirms_execution_completion is False
+    assert driver.reports_device_status is False
+
+    await driver.run(make_output(), MagicMock(), MagicMock())
+
+    assert client.sent_programs
+    assert client.status_reads == 0
+    assert driver.manual_execution_confirmation_required is True
+    await driver.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_status_polling_publishes_run_then_idle_as_new_states(
+    fake_api, driver_objects
+):
+    context, machine = driver_objects
+    driver = RuidaSerialDriver(context, machine)
+    driver.STATUS_POLL_INTERVAL = 0.005
+    published = []
+    driver.state_changed.connect(
+        lambda sender, state: published.append(state),
+        weak=False,
+    )
+    driver.setup(port="/dev/cu.ruida", baudrate=115200)
+    await driver.connect()
+    connected_state = driver.state
+    client = client_for(driver)
+    client.status_responses.extend(
+        [
+            machine_status(0x10401, job_running=True),
+            machine_status(),
+        ]
+    )
+
+    await wait_until(
+        lambda: (
+            len(published) >= 3 and published[-1].status == DeviceStatus.IDLE
+        )
+    )
+
+    assert connected_state.status == DeviceStatus.IDLE
+    assert [state.status for state in published[-2:]] == [
+        DeviceStatus.RUN,
+        DeviceStatus.IDLE,
+    ]
+    assert published[-2] is not published[-1]
+    assert driver.state is published[-1]
+    await driver.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_polling_never_clears_operator_confirmation_latch(
+    fake_api, driver_objects
+):
+    context, machine = driver_objects
+    driver = RuidaSerialDriver(context, machine)
+    driver.STATUS_POLL_INTERVAL = 0.005
+    observed_statuses = []
+    driver.state_changed.connect(
+        lambda sender, state: observed_statuses.append(state.status),
+        weak=False,
+    )
+    driver.setup(port="/dev/cu.ruida", baudrate=115200)
+    await driver.connect()
+    client = client_for(driver)
+
+    await driver.run(make_output(), MagicMock(), MagicMock())
+    await wait_until(
+        lambda: (
+            DeviceStatus.RUN in observed_statuses
+            and driver.state.status == DeviceStatus.IDLE
+            and not client.status_responses
+        )
+    )
+
+    assert driver.confirms_execution_completion is False
+    assert driver._execution_completion_monitoring_enabled is False
+    assert driver._status_semantics_validated is True
+    assert driver.manual_execution_confirmation_required is True
+    assert driver._active_job_generation is None
+    await driver.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_boss_profile_run_waits_for_validated_natural_completion(
+    fake_api, driver_objects
+):
+    context, machine = driver_objects
+    driver = RuidaSerialDriver(context, machine)
+    driver._status_semantics_validated = False
+    driver.config = {
+        RUIDA_MACHINE_STATUS_PROFILE_KEY: (BOSS_LS2040_DA000400_STATUS_PROFILE)
+    }
+    driver.STATUS_POLL_INTERVAL = 0.005
+    finished = []
+    driver.job_finished.connect(
+        lambda sender: finished.append(sender),
+        weak=False,
+    )
+    driver.setup(port="/dev/cu.ruida", baudrate=115200)
+    await driver.connect()
+    client = client_for(driver)
+
+    await driver.run(make_output(), MagicMock(), MagicMock())
+
+    assert client.sent_programs
+    assert driver.manual_execution_confirmation_required is False
+    assert driver._active_job_generation is None
+    assert finished == [driver]
+    await driver.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_boss_profile_completes_two_jobs_on_one_connection(
+    fake_api, driver_objects
+):
+    api, _codec = fake_api
+    context, machine = driver_objects
+    driver = RuidaSerialDriver(context, machine)
+    driver.config = {
+        RUIDA_MACHINE_STATUS_PROFILE_KEY: (BOSS_LS2040_DA000400_STATUS_PROFILE)
+    }
+    driver.STATUS_POLL_INTERVAL = 0.005
+    finished = []
+    driver.job_finished.connect(
+        lambda sender: finished.append(sender),
+        weak=False,
+    )
+    driver.setup(port="/dev/cu.ruida", baudrate=115200)
+    await driver.connect()
+    client = client_for(driver)
+
+    await driver.run(make_output(), MagicMock(), MagicMock())
+
+    assert driver._active_job_generation is None
+    assert driver.manual_execution_confirmation_required is False
+    assert driver.state.status == DeviceStatus.IDLE
+
+    await driver.run(make_output(), MagicMock(), MagicMock())
+
+    assert driver._client is client
+    assert api.clients == [client]
+    assert client.open_probes == [False]
+    assert len(client.sent_programs) == 2
+    assert driver._job_generation == 2
+    assert driver._active_job_generation is None
+    assert driver.manual_execution_confirmation_required is False
+    assert driver.state.status == DeviceStatus.IDLE
+    assert finished == [driver, driver]
+    await driver.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_internal_completion_requires_active_then_stable_idle(
+    fake_api, driver_objects
+):
+    context, machine = driver_objects
+    driver = RuidaSerialDriver(context, machine)
+    finished = []
+    driver.job_finished.connect(
+        lambda sender: finished.append(sender),
+        weak=False,
+    )
+    driver._execution_completion_monitoring_enabled = True
+    driver._execution_unconfirmed = True
+    assert driver.confirms_execution_completion is True
+    generation, future = driver._begin_completion("job")
+    preactive_idle = machine_status()
+    completed_idle = machine_status(0x10600)
+    active = machine_status(0x10401, job_running=True)
+
+    driver._process_completion_status(preactive_idle, generation)
+    driver._process_completion_status(preactive_idle, generation)
+    assert future.done() is False
+    driver._process_completion_status(active, generation)
+    driver._process_completion_status(completed_idle, generation)
+    driver._process_completion_status(completed_idle, generation)
+    assert future.done() is False
+    driver._process_completion_status(completed_idle, generation)
+    await future
+
+    assert driver.manual_execution_confirmation_required is False
+    assert driver._active_job_generation is None
+    assert finished == [driver]
+
+
+@pytest.mark.asyncio
+async def test_internal_completion_rejects_unobserved_short_job(
+    fake_api, driver_objects
+):
+    context, machine = driver_objects
+    driver = RuidaSerialDriver(context, machine)
+    driver.ACTIVE_OBSERVATION_IDLE_SAMPLES = 2
+    driver._execution_completion_monitoring_enabled = True
+    driver._execution_unconfirmed = True
+    generation, future = driver._begin_completion("job")
+
+    driver._process_completion_status(machine_status(), generation)
+    driver._process_completion_status(machine_status(0x10600), generation)
+
+    with pytest.raises(
+        ExecutionCompletionUnknownError,
+        match="never reported this program as active",
+    ):
+        await future
+    assert driver.manual_execution_confirmation_required is True
+    assert driver._active_job_generation is None
+
+
+@pytest.mark.asyncio
+async def test_natural_completion_rejects_fresh_idle_after_active(
+    fake_api, driver_objects
+):
+    context, machine = driver_objects
+    driver = RuidaSerialDriver(context, machine)
+    driver._execution_completion_monitoring_enabled = True
+    driver._execution_unconfirmed = True
+    generation, future = driver._begin_completion("job")
+    driver._process_completion_status(machine_status(0x10401), generation)
+
+    driver._process_completion_status(machine_status(0), generation)
+
+    with pytest.raises(
+        ExecutionCompletionUnknownError,
+        match="post-execution idle",
+    ):
+        await future
+    assert driver.manual_execution_confirmation_required is True
+
+
+@pytest.mark.asyncio
+async def test_unknown_exact_word_fails_active_completion_closed(
+    fake_api, driver_objects
+):
+    context, machine = driver_objects
+    driver = RuidaSerialDriver(context, machine)
+    driver._execution_completion_monitoring_enabled = True
+    driver._execution_unconfirmed = True
+    generation, future = driver._begin_completion("job")
+    driver._process_completion_status(machine_status(0x10401), generation)
+
+    driver._process_completion_status(machine_status(0x10402), generation)
+
+    with pytest.raises(
+        ExecutionCompletionUnknownError,
+        match="unvalidated machine status 0x10402",
+    ):
+        await future
+    assert driver.manual_execution_confirmation_required is True
+
+
+@pytest.mark.asyncio
+async def test_stale_status_generation_cannot_complete_current_job(
+    fake_api, driver_objects
+):
+    context, machine = driver_objects
+    driver = RuidaSerialDriver(context, machine)
+    driver._execution_completion_monitoring_enabled = True
+    old_generation, old_future = driver._begin_completion("job")
+    driver._abandon_completion(old_generation)
+    assert old_future.cancelled()
+    generation, future = driver._begin_completion("job")
+
+    driver._process_completion_status(
+        machine_status(0x10401, job_running=True),
+        old_generation,
+    )
+    for _ in range(driver.COMPLETION_IDLE_SAMPLES):
+        driver._process_completion_status(
+            machine_status(0x10600),
+            old_generation,
+        )
+
+    assert generation != old_generation
+    assert future.done() is False
+    assert driver._active_job_generation == generation
+    driver._abandon_completion(generation)
+
+
+@pytest.mark.asyncio
+async def test_internal_cancel_requires_post_stop_stable_idle(
+    fake_api, driver_objects, monkeypatch
+):
+    context, machine = driver_objects
+    driver = RuidaSerialDriver(context, machine)
+    driver._execution_completion_monitoring_enabled = True
+    driver._execution_unconfirmed = True
+    generation, future = driver._begin_completion("job")
+    finished = []
+    driver.job_finished.connect(
+        lambda sender: finished.append(sender),
+        weak=False,
+    )
+    driver._process_completion_status(
+        machine_status(0x10401),
+        generation,
+    )
+    driver.notify_cancel_requested()
+
+    for _ in range(driver.COMPLETION_IDLE_SAMPLES):
+        driver._process_completion_status(
+            machine_status(0x10600),
+            generation,
+        )
+    assert future.done() is False
+    driver._stop_delivered_generation = generation
+    clock = [10.0]
+    monkeypatch.setattr(program_driver, "monotonic", lambda: clock[0])
+    driver._process_completion_status(
+        machine_status(0x10600),
+        generation,
+    )
+    clock[0] = 10.2
+    driver._process_completion_status(
+        machine_status(0x10600),
+        generation,
+    )
+    clock[0] = 10.7
+    driver._process_completion_status(
+        machine_status(0x10600),
+        generation,
+    )
+
+    assert future.done() is True
+
+    with pytest.raises(JobCancelledError):
+        await future
+    assert driver.manual_execution_confirmation_required is False
+    assert finished == []
+
+
+@pytest.mark.asyncio
+async def test_stop_transition_resets_stable_idle_window(
+    fake_api, driver_objects, monkeypatch
+):
+    context, machine = driver_objects
+    driver = RuidaSerialDriver(context, machine)
+    driver._execution_completion_monitoring_enabled = True
+    driver._execution_unconfirmed = True
+    generation, future = driver._begin_completion("job")
+    driver._process_completion_status(machine_status(0x10401), generation)
+    driver.notify_cancel_requested()
+    driver._stop_delivered_generation = generation
+    clock = [20.0]
+    monkeypatch.setattr(program_driver, "monotonic", lambda: clock[0])
+    driver._process_completion_status(machine_status(0x10600), generation)
+    clock[0] = 20.4
+    driver._process_completion_status(machine_status(0x10600), generation)
+    driver._process_completion_status(machine_status(0x510600), generation)
+    clock[0] = 21.0
+    driver._process_completion_status(machine_status(0x10600), generation)
+    clock[0] = 21.3
+    driver._process_completion_status(machine_status(0x10600), generation)
+    clock[0] = 21.5
+    driver._process_completion_status(machine_status(0x10600), generation)
+    assert future.done() is False
+    clock[0] = 21.7
+    driver._process_completion_status(machine_status(0x10600), generation)
+
+    with pytest.raises(JobCancelledError):
+        await future
+    assert driver.manual_execution_confirmation_required is False
+
+
+@pytest.mark.asyncio
+async def test_boss_stop_confirms_only_observed_active_generation(
+    fake_api, driver_objects
+):
+    context, machine = driver_objects
+    driver = RuidaSerialDriver(context, machine)
+    driver._status_semantics_validated = False
+    driver.config = {
+        RUIDA_MACHINE_STATUS_PROFILE_KEY: (BOSS_LS2040_DA000400_STATUS_PROFILE)
+    }
+    driver.STATUS_POLL_INTERVAL = 0.005
+    driver.STOP_IDLE_MIN_DURATION = 0
+    driver.ACTIVE_OBSERVATION_IDLE_SAMPLES = 1000
+    finished = []
+    driver.job_finished.connect(
+        lambda sender: finished.append(sender),
+        weak=False,
+    )
+    driver.setup(port="/dev/cu.ruida", baudrate=115200)
+    await driver.connect()
+    client = client_for(driver)
+    client.auto_status_after_send = False
+    run_task = asyncio.create_task(
+        driver.run(make_output(), MagicMock(), MagicMock())
+    )
+    await wait_until(lambda: bool(client.sent_programs))
+    client.status_responses.append(machine_status(0x10401))
+    await wait_until(lambda: driver._observed_active)
+
+    await driver.cancel()
+
+    with pytest.raises(JobCancelledError):
+        await run_task
+    assert client.stop_calls == 1
+    assert client.stop_retry_limits == [0]
+    assert client.handshake_profile.max_retries == 3
+    assert driver.manual_execution_confirmation_required is False
+    assert finished == []
+    await driver.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_concurrent_boss_stop_is_one_shot_and_new_generation_resets(
+    fake_api, driver_objects
+):
+    context, machine = driver_objects
+    driver = RuidaSerialDriver(context, machine)
+    driver.config = {
+        RUIDA_MACHINE_STATUS_PROFILE_KEY: (BOSS_LS2040_DA000400_STATUS_PROFILE)
+    }
+    driver.STATUS_POLL_INTERVAL = 0.005
+    driver.STOP_IDLE_MIN_DURATION = 0
+    driver.ACTIVE_OBSERVATION_IDLE_SAMPLES = 1000
+    driver.setup(port="/dev/cu.ruida", baudrate=115200)
+    await driver.connect()
+    client = client_for(driver)
+    client.auto_status_after_send = False
+    stop_started = threading.Event()
+    stop_release = threading.Event()
+    stop_attempts = []
+    original_stop = client.stop_process
+
+    def blocking_stop():
+        stop_attempts.append(None)
+        stop_started.set()
+        stop_release.wait()
+        return original_stop()
+
+    client.stop_process = blocking_stop
+    run_task = asyncio.create_task(
+        driver.run(make_output(), MagicMock(), MagicMock())
+    )
+    await wait_until(lambda: bool(client.sent_programs))
+    client.status_responses.append(machine_status(0x10401))
+    await wait_until(lambda: driver._observed_active)
+
+    first_stop = asyncio.create_task(driver.cancel())
+    assert await asyncio.to_thread(stop_started.wait, 1)
+    second_stop = asyncio.create_task(driver.cancel())
+    await asyncio.sleep(0.02)
+    assert len(stop_attempts) == 1
+    stop_release.set()
+    await asyncio.gather(first_stop, second_stop)
+
+    with pytest.raises(JobCancelledError):
+        await run_task
+    assert client.stop_calls == 1
+    assert driver.manual_execution_confirmation_required is False
+
+    run_task = asyncio.create_task(
+        driver.run(make_output(), MagicMock(), MagicMock())
+    )
+    await wait_until(lambda: len(client.sent_programs) == 2)
+    client.status_responses.append(machine_status(0x10401))
+    await wait_until(lambda: driver._observed_active)
+    await driver.cancel()
+
+    with pytest.raises(JobCancelledError):
+        await run_task
+    assert len(stop_attempts) == 2
+    assert client.stop_calls == 2
+    await driver.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_cancelled_boss_stop_attempt_is_not_retransmitted(
+    fake_api, driver_objects
+):
+    context, machine = driver_objects
+    driver = RuidaSerialDriver(context, machine)
+    driver.config = {
+        RUIDA_MACHINE_STATUS_PROFILE_KEY: (BOSS_LS2040_DA000400_STATUS_PROFILE)
+    }
+    driver.STATUS_POLL_INTERVAL = 0.005
+    driver.ACTIVE_OBSERVATION_IDLE_SAMPLES = 1000
+    driver.setup(port="/dev/cu.ruida", baudrate=115200)
+    await driver.connect()
+    client = client_for(driver)
+    client.auto_status_after_send = False
+    stop_started = threading.Event()
+    stop_release = threading.Event()
+    original_stop = client.stop_process
+
+    def blocking_stop():
+        stop_started.set()
+        stop_release.wait()
+        return original_stop()
+
+    client.stop_process = blocking_stop
+    run_task = asyncio.create_task(
+        driver.run(make_output(), MagicMock(), MagicMock())
+    )
+    await wait_until(lambda: bool(client.sent_programs))
+    client.status_responses.append(machine_status(0x10401))
+    await wait_until(lambda: driver._observed_active)
+
+    stop_task = asyncio.create_task(driver.cancel())
+    assert await asyncio.to_thread(stop_started.wait, 1)
+    stop_task.cancel()
+    stop_release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await stop_task
+    with pytest.raises(
+        ExecutionCompletionUnknownError,
+        match="already attempted",
+    ):
+        await driver.cancel()
+
+    assert client.stop_calls == 1
+    with pytest.raises(asyncio.CancelledError):
+        await run_task
+    await driver.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_scoped_boss_stop_rejects_unexpected_serial_packet(
+    fake_api, driver_objects
+):
+    context, machine = driver_objects
+    driver = RuidaSerialDriver(context, machine)
+    driver.config = {
+        RUIDA_MACHINE_STATUS_PROFILE_KEY: (BOSS_LS2040_DA000400_STATUS_PROFILE)
+    }
+    driver.setup(port="/dev/cu.ruida", baudrate=115200)
+    await driver.connect()
+    client = client_for(driver)
+    client.stop_receipt = SimpleNamespace(
+        completed_packets=1,
+        transmissions=1,
+        retries=0,
+        packets=(bytes.fromhex("00dbd209"),),
+    )
+
+    with pytest.raises(DeviceConnectionError, match="unexpected serial"):
+        await driver.cancel()
+    with pytest.raises(
+        ExecutionCompletionUnknownError,
+        match="already attempted",
+    ):
+        await driver.cancel()
+
+    assert client.stop_calls == 1
+    await driver.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_unknown_status_flags_fail_closed_without_clearing_latch(
+    fake_api, driver_objects
+):
+    context, machine = driver_objects
+    driver = RuidaSerialDriver(context, machine)
+    driver.STATUS_POLL_INTERVAL = 0.005
+    driver.setup(port="/dev/cu.ruida", baudrate=115200)
+    await driver.connect()
+    client = client_for(driver)
+    driver._execution_unconfirmed = True
+    client.status_responses.append(machine_status(0x40, unknown_bits=0x40))
+
+    await wait_until(lambda: driver.state.status == DeviceStatus.UNKNOWN)
+
+    assert driver.manual_execution_confirmation_required is True
+    assert client.is_ready is True
+    await driver.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_status_failure_invalidates_session_and_retains_latch(
+    fake_api, driver_objects
+):
+    context, machine = driver_objects
+    driver = RuidaSerialDriver(context, machine)
+    driver.STATUS_POLL_INTERVAL = 0.005
+    statuses = []
+    driver.connection_status_changed.connect(
+        lambda sender, status, message: statuses.append(status),
+        weak=False,
+    )
+    driver.setup(port="/dev/cu.ruida", baudrate=115200)
+    await driver.connect()
+    client = client_for(driver)
+    driver._execution_unconfirmed = True
+    client.status_error = UnexpectedStatusFailure("status timeout")
+
+    await wait_until(lambda: TransportStatus.ERROR in statuses)
+
+    assert driver.state.status == DeviceStatus.UNKNOWN
+    assert driver.manual_execution_confirmation_required is True
+    assert client.is_ready is False
+    await driver.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_status_failure_fails_generation_started_after_poll_snapshot(
+    fake_api, driver_objects
+):
+    context, machine = driver_objects
+    driver = RuidaSerialDriver(context, machine)
+    driver._execution_completion_monitoring_enabled = True
+    driver.setup(port="/dev/cu.ruida", baudrate=115200)
+    await driver.connect()
+    await driver._stop_status_polling()
+    client = client_for(driver)
+    generation, future = driver._begin_completion("job")
+    driver._execution_unconfirmed = True
+
+    await driver._handle_status_failure(
+        client,
+        driver._session_generation,
+        UnexpectedStatusFailure("late poll failed"),
+    )
+
+    with pytest.raises(
+        ExecutionCompletionUnknownError,
+        match="status became unavailable",
+    ):
+        await future
+    assert driver._active_job_generation is None
+    assert driver.manual_execution_confirmation_required is True
+    assert client.is_ready is False
+    assert generation == 1
+    await driver.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_malformed_polled_status_invalidates_session(
+    fake_api, driver_objects
+):
+    context, machine = driver_objects
+    driver = RuidaSerialDriver(context, machine)
+    driver.STATUS_POLL_INTERVAL = 0.005
+    statuses = []
+    driver.connection_status_changed.connect(
+        lambda sender, status, message: statuses.append(status),
+        weak=False,
+    )
+    driver.setup(port="/dev/cu.ruida", baudrate=115200)
+    await driver.connect()
+    client = client_for(driver)
+    driver._execution_unconfirmed = True
+    client.status_responses.append(SimpleNamespace(raw_word=0))
+
+    await wait_until(lambda: TransportStatus.ERROR in statuses)
+
+    assert driver.state.status == DeviceStatus.UNKNOWN
+    assert driver.manual_execution_confirmation_required is True
+    assert client.is_ready is False
+    assert driver._status_task is None
+    await driver.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_active_preflight_rejects_program_without_transfer(
+    fake_api, driver_objects
+):
+    context, machine = driver_objects
+    driver = RuidaSerialDriver(context, machine)
+    driver.STATUS_POLL_INTERVAL = 0.005
+    driver.setup(port="/dev/cu.ruida", baudrate=115200)
+    await driver.connect()
+    client = client_for(driver)
+    client.status_responses.append(machine_status(0x10401, job_running=True))
+
+    with pytest.raises(
+        DeviceConnectionError,
+        match="controller program is active",
+    ):
+        await driver.run(make_output(), MagicMock(), MagicMock())
+
+    assert client.sent_programs == []
+    assert driver.state.status == DeviceStatus.RUN
+    assert driver.manual_execution_confirmation_required is False
     await driver.cleanup()
 
 
@@ -353,7 +1354,7 @@ async def test_execution_latch_clears_only_after_successful_reopen(
     setup_args = {"port": "/dev/cu.ruida", "baudrate": 115200}
     driver.setup(**setup_args)
     await driver.connect()
-    assert driver.reports_device_status is False
+    assert driver.reports_device_status is True
     assert driver.supports_cancel is True
     assert driver.manual_execution_confirmation_required is False
 
@@ -391,6 +1392,7 @@ async def test_cancel_sends_process_stop_and_retains_execution_latch(
 ):
     context, machine = driver_objects
     driver = RuidaSerialDriver(context, machine)
+    driver.STATUS_POLL_INTERVAL = 0.005
     driver.setup(port="/dev/cu.ruida", baudrate=115200)
     await driver.connect()
     client = client_for(driver)
@@ -399,7 +1401,11 @@ async def test_cancel_sends_process_stop_and_retains_execution_latch(
     await driver.cancel()
 
     assert client.stop_calls == 1
+    assert client.stop_retry_limits == [0]
+    assert client.handshake_profile.max_retries == 3
     assert client.sent_programs == []
+    await wait_until(lambda: not client.status_responses)
+    assert driver.state.status == DeviceStatus.IDLE
     assert driver.manual_execution_confirmation_required is True
     await driver.cleanup()
 
@@ -1405,6 +2411,7 @@ async def test_program_drivers_expose_no_guessed_controls(
     driver.setup(port="/dev/cu.ruida", baudrate=115200)
 
     assert driver.native_overscan is False
+    assert driver.supports_hold is False
     assert driver.can_home() is False
     assert driver.can_jog() is False
     assert driver.supported_wcs == ["MACHINE"]

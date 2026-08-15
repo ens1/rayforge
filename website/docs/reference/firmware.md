@@ -20,7 +20,7 @@ Rayforge is designed primarily for **GRBL-based controllers** but also supports 
 | **Smoothieware** | All           | Compatible    | SmoothieDriver (Telnet)          | Network-based          |
 | **Marlin**       | 2.0+          | Compatible    | Marlin Serial                    | Laser mode required    |
 | **ESP3D**        | All           | Compatible    | GRBL Telnet                      | Network-based          |
-| **Ruida**        | 644XS profile | Experimental  | Ruida USB Serial / UDP Program   | Program transfer only  |
+| **Ruida**        | 644XS profile | Experimental  | Ruida USB Serial / UDP Program   | Boss USB status only   |
 | **OctoPrint**    | All           | Experimental  | OctoPrint                        | See notes below        |
 | **Other**        | -             | Not supported | -                                | Request support        |
 
@@ -480,10 +480,13 @@ $22=1       ; Homing enabled
 
 ### Ruida Controllers
 
-Rayforge includes an experimental, transfer-only backend for Ruida
+Rayforge includes an experimental program-transfer backend for Ruida
 controllers. It generates complete Ruida `.rd` programs and can transfer them
-through either **Ruida (USB Serial)** or **Ruida (UDP Program)**. The protocol
-compiler is provided by
+through either **Ruida (USB Serial)** or **Ruida (UDP Program)**. The
+hardware-validated Boss LS2040 USB-serial profile also polls the controller's
+read-only
+program-status word. The protocol compiler and controller client are provided
+by
 [ruida-re](https://github.com/ens1/ruida-re), whose current execution evidence
 profile is based on LightBurn 2.1.03 output for a Ruida 644XS controller.
 
@@ -785,26 +788,60 @@ controller-specific guesses.
 - **Ruida (UDP Program)** probes the controller link, then transfers the same
   complete program over UDP.
 - A successful transfer confirms that the program bytes were delivered under
-  the transport's protocol contract. It does **not** confirm that physical
-  execution has completed.
-- After a completed or ambiguous transfer, Rayforge treats controller
-  execution as unconfirmed and refuses another transfer. The next Send or
-  Frame action asks the operator to confirm that the controller is visibly
-  idle and that motion and laser emission have stopped. Confirmation replaces
-  the driver session and reconnects; it does not stop a running program or
-  resend the previous job. After reconnecting, start the intended action
-  separately.
-- Stop sends Ruida's software process-stop command. It remains available while
-  a submission is pending or execution is unconfirmed, but it is serialized
-  behind an active transfer. A host write or network acknowledgement does not
-  confirm that motion has halted, and Stop does not clear the visible-idle
-  confirmation requirement.
+  the transport's protocol contract. It does **not** by itself confirm that
+  physical execution has completed.
+- Rayforge polls the logical `DA 00 04 00` machine-status request. The built-in
+  Boss LS2040 device profile opts into the versioned
+  `boss-ls2040-da000400-v1` interpretation. No controller name, model, port, or
+  generic Ruida driver selection enables it implicitly, and switching a marked
+  profile to UDP disables the interpretation. See the
+  [scoped status evidence manifest](../../../tests/machine/driver/ruida/fixtures/hardware/boss-ls2040-usb-serial-status-da000400-v1/manifest-v1.json).
+- For that profile, exact `0x0` and `0x10600` words are hardware-validated
+  **program-idle** states. Exact `0x10401` is program-running, `0x10403` is
+  program-paused, and `0x10405` is the non-idle completion tail. Exact
+  `0x410403`, `0x830401`, and `0x510600` are non-idle pause, resume, and Stop
+  transitions. Every other word is Unknown and fails closed.
+- This word does **not** report every kind of axis motion. During the supervised
+  capture, about ten manual panel jogs left the word at `0x0`. The UI therefore
+  describes the scoped states as **Program idle**, **Program running**, and
+  **Program paused**, not as proof that the entire machine is motionless.
+  Before Send or Frame, the operator must verify that no one is using the
+  controller panel, manual motion has stopped, and the route is safe.
+  Pause remains display-only; Rayforge does not expose Ruida hold/resume.
+- Natural completion requires Rayforge to observe an exact active word after
+  the current send and then three consecutive exact `0x10600` samples. A
+  fresh-idle `0x0` cannot complete a previously active job. If all polls miss
+  a short job's active state, the execution latch remains set for operator
+  confirmation.
+- Unscoped and UDP Ruida profiles remain transfer-only and do not issue the
+  `DA 00 04 00` request. Their status stays Unknown and does not participate in
+  UI busy-state decisions, clear an execution latch, or authorize another
+  transfer. Their established transfer path remains available and completion
+  stays operator-confirmed.
+- Existing saved machines are not silently identified or upgraded as Boss
+  hardware. Recreate the machine from the built-in Boss LS2040 profile to opt
+  into the scoped status contract. Device-profile exports preserve the
+  explicit marker.
+- After an ambiguous transfer, Rayforge refuses another transfer. The next
+  Send or Frame action asks the operator to confirm that the controller is
+  visibly idle and that motion and laser emission have stopped. Confirmation
+  replaces the driver session and reconnects; it does not stop a running
+  program or resend the previous job. Start the intended action separately.
+- Stop sends Ruida's software process-stop command exactly once with retries
+  disabled and remains serialized behind an active transfer. Automatic Stop
+  confirmation requires a same-generation active observation before the
+  command. The `0x510600` transition is noncomplete; cancellation resolves
+  only after exact `0x10600` remains stable for at least three samples and 600
+  ms. A confirmed Stop is recorded as cancelled and adds no machine hours.
+  Any other word, status error, missing active observation, or malformed
+  receipt keeps the operator-confirmation latch set.
 
 :::warning
-The transfer-only drivers do not implement Ruida device management, position
-or execution status, homing, jogging, hold/resume, controller settings, or
-immediate laser controls. Their software Stop command is not an emergency stop
-and cannot replace the machine's physical controls.
+The program drivers do not implement Ruida device management, position,
+homing, jogging, hold/resume, controller settings, or immediate laser controls.
+Only the explicitly scoped Boss profile confirms program completion. Its
+software Stop command is not an emergency stop and cannot replace the
+machine's physical controls.
 :::
 
 Ruida is a binary protocol, so the G-code console, G-code macros, and G-code

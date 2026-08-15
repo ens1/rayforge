@@ -1,5 +1,6 @@
 import asyncio
 import json
+import threading
 from contextlib import nullcontext
 from functools import partial
 from unittest.mock import MagicMock, PropertyMock
@@ -13,7 +14,10 @@ from rayforge.core.config import ConfigManager
 from rayforge.machine.cmd import MachineCmd
 from rayforge.machine.driver.driver import (
     DeviceConnectionError,
+    DeviceState,
+    DeviceStatus,
     ExecutionCompletionUnknownError,
+    JobCancelledError,
 )
 from rayforge.machine.driver.ruida.ruida_encoder import (
     RuidaEncoder,
@@ -214,6 +218,71 @@ class TestMachineCmdJobMonitoring:
         assert machine_cmd._current_monitor is None
 
     @pytest.mark.asyncio
+    async def test_two_confirmed_jobs_each_account_hours_once(
+        self, machine_cmd, machine, job_artifact, mocker
+    ):
+        pipeline = machine_cmd._editor.pipeline
+        handle = MagicMock()
+        mocker.patch.object(
+            pipeline,
+            "generate_job_artifact_async",
+            new_callable=mocker.AsyncMock,
+            side_effect=(handle, handle),
+        )
+        mocker.patch.object(
+            pipeline.artifact_store,
+            "checkout_handle",
+            side_effect=(
+                nullcontext(job_artifact),
+                nullcontext(job_artifact),
+            ),
+        )
+        mocker.patch.object(
+            type(machine.driver),
+            "confirms_execution_completion",
+            new_callable=PropertyMock,
+            return_value=True,
+        )
+        mocker.patch.object(
+            type(machine),
+            "reports_granular_progress",
+            new_callable=PropertyMock,
+            return_value=False,
+        )
+        run_mock = mocker.patch.object(
+            machine.driver,
+            "run",
+            new_callable=mocker.AsyncMock,
+        )
+        hours_mock = mocker.patch.object(machine, "add_machine_hours")
+        completion_mock = mocker.patch(
+            "rayforge.machine.cmd.JobMonitor.mark_as_complete"
+        )
+
+        await machine_cmd.send_job(machine)
+
+        assert machine_cmd.is_job_running is False
+        assert machine_cmd.execution_confirmation_required(machine) is False
+
+        await machine_cmd.send_job(machine)
+
+        estimated_hours = (
+            job_artifact.ops.estimate_time(
+                default_feed_rate=machine.max_cut_speed,
+                default_rapid_rate=machine.max_travel_speed,
+                acceleration=machine.acceleration,
+            )
+            / 3600.0
+        )
+        assert run_mock.await_count == 2
+        assert completion_mock.call_count == 2
+        assert hours_mock.call_count == 2
+        for call in hours_mock.call_args_list:
+            assert call.args == (pytest.approx(estimated_hours),)
+        assert machine_cmd.is_job_running is False
+        assert machine_cmd.execution_confirmation_required(machine) is False
+
+    @pytest.mark.asyncio
     async def test_transfer_only_job_does_not_claim_execution_completion(
         self, machine_cmd, machine, job_artifact, mocker
     ):
@@ -249,6 +318,132 @@ class TestMachineCmdJobMonitoring:
         transferred_mock.assert_called_once_with(machine_cmd, machine=machine)
         assert machine_cmd.execution_completion_unknown is True
         assert machine_cmd._current_monitor is None
+
+    @pytest.mark.asyncio
+    async def test_reported_idle_does_not_clear_transfer_only_latch(
+        self, machine_cmd, machine, job_artifact, mocker
+    ):
+        mocker.patch.object(
+            type(machine.driver),
+            "confirms_execution_completion",
+            new_callable=PropertyMock,
+            return_value=False,
+        )
+        machine.driver.reports_device_status = True
+        mocker.patch.object(
+            machine.driver,
+            "run",
+            new_callable=mocker.AsyncMock,
+        )
+
+        await machine_cmd._run_send_action(job_artifact, machine, None)
+        machine.driver.state_changed.send(
+            machine.driver,
+            state=DeviceState(status=DeviceStatus.RUN),
+        )
+        machine.driver.state_changed.send(
+            machine.driver,
+            state=DeviceState(status=DeviceStatus.IDLE),
+        )
+        await asyncio.sleep(0)
+
+        assert machine.device_state.status == DeviceStatus.IDLE
+        assert machine_cmd.execution_confirmation_required(machine) is True
+        assert machine_cmd.execution_completion_unknown is True
+
+    @pytest.mark.asyncio
+    async def test_confirmed_cancel_is_not_failure_or_completed_hours(
+        self, machine_cmd, machine, job_artifact, mocker
+    ):
+        mocker.patch.object(
+            type(machine.driver),
+            "confirms_execution_completion",
+            new_callable=PropertyMock,
+            return_value=True,
+        )
+        mocker.patch.object(
+            machine.driver,
+            "run",
+            new_callable=mocker.AsyncMock,
+            side_effect=JobCancelledError("cancelled"),
+        )
+        hours = mocker.patch.object(machine, "add_machine_hours")
+        complete = mocker.patch(
+            "rayforge.machine.cmd.JobMonitor.mark_as_complete"
+        )
+
+        await machine_cmd._run_send_action(job_artifact, machine, None)
+
+        hours.assert_not_called()
+        complete.assert_not_called()
+        assert machine_cmd._current_monitor is None
+        assert machine_cmd.execution_confirmation_required(machine) is False
+
+    @pytest.mark.asyncio
+    async def test_cancel_notifies_driver_before_scheduling_stop(
+        self, machine_cmd, machine, mocker, task_mgr
+    ):
+        events = []
+        notify = mocker.patch.object(
+            machine.driver,
+            "notify_cancel_requested",
+            side_effect=lambda: events.append("notified"),
+        )
+
+        async def cancel():
+            events.append("stopped")
+
+        cancel_mock = mocker.patch.object(
+            machine.driver,
+            "cancel",
+            side_effect=cancel,
+        )
+
+        machine_cmd.cancel_job(machine)
+
+        notify.assert_called_once_with()
+        assert events[0] == "notified"
+        await wait_for_tasks_to_finish(task_mgr)
+        cancel_mock.assert_awaited_once_with()
+        assert events == ["notified", "stopped"]
+
+    @pytest.mark.asyncio
+    async def test_duplicate_cancel_does_not_replace_pending_stop(
+        self, machine_cmd, machine, mocker, task_mgr
+    ):
+        started = threading.Event()
+        release = threading.Event()
+        notify = mocker.patch.object(
+            machine.driver,
+            "notify_cancel_requested",
+        )
+
+        async def cancel():
+            started.set()
+            await asyncio.to_thread(release.wait)
+
+        cancel_mock = mocker.patch.object(
+            machine.driver,
+            "cancel",
+            side_effect=cancel,
+        )
+
+        assert machine_cmd.cancel_job(machine) is True
+        task_key = ("cancel-job", machine.id)
+        first_task = task_mgr.get_task(task_key)
+        assert first_task is not None
+        assert await asyncio.to_thread(started.wait, 1)
+
+        assert machine_cmd.cancel_job(machine) is False
+        assert task_mgr.get_task(task_key) is first_task
+        assert machine_cmd.cancel_pending(machine) is True
+        notify.assert_called_once_with()
+
+        release.set()
+        await wait_for_tasks_to_finish(task_mgr)
+
+        cancel_mock.assert_awaited_once_with()
+        assert machine_cmd.cancel_pending(machine) is False
 
     def test_driver_defaults_to_no_manual_execution_confirmation(
         self, machine

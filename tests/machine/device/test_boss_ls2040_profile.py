@@ -1,4 +1,5 @@
 import asyncio
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
@@ -6,7 +7,11 @@ import pytest
 from rayforge.config import BUILTIN_DEVICES_DIR
 from rayforge.machine.device.manager import DeviceProfileManager
 from rayforge.machine.device.profile import export_machine_to_dir
-from rayforge.machine.driver.ruida import RuidaSerialDriver
+from rayforge.machine.driver.ruida import RuidaSerialDriver, program_driver
+from rayforge.machine.driver.ruida.program_driver import (
+    BOSS_LS2040_DA000400_STATUS_PROFILE,
+    RUIDA_MACHINE_STATUS_PROFILE_KEY,
+)
 from rayforge.machine.models.axis import AxisDirection
 from rayforge.machine.models.laser import LaserHead, LaserType
 from rayforge.machine.models.machine import Origin
@@ -28,6 +33,9 @@ def _assert_boss_machine(machine, port=""):
         "port": port,
         "baudrate": 115200,
         "job_profile": "proven",
+    }
+    assert machine.driver_config == {
+        RUIDA_MACHINE_STATUS_PROFILE_KEY: (BOSS_LS2040_DA000400_STATUS_PROFILE)
     }
     assert machine.auto_connect is True
     assert machine.axis_extents == pytest.approx(
@@ -85,6 +93,9 @@ async def test_boss_profile_discovery_roundtrip_is_fail_closed(
     _assert_boss_machine(machine)
 
     assert isinstance(machine.driver, RuidaSerialDriver)
+    assert machine.driver.config == machine.driver_config
+    assert machine.driver.reports_device_status is True
+    assert machine.driver.confirms_execution_completion is True
     assert machine.driver.state.error is not None
     assert machine.driver.state.error.title == (
         "Serial port must be configured."
@@ -101,6 +112,7 @@ async def test_boss_profile_discovery_roundtrip_is_fail_closed(
     restored = exported.create_machine(lite_context)
     await _wait_for_tasks(task_mgr)
     _assert_boss_machine(restored)
+    assert restored.driver.config == restored.driver_config
     assert restored.driver.state.error is not None
     connect.assert_not_awaited()
 
@@ -135,4 +147,56 @@ async def test_boss_profile_connects_when_serial_port_is_configured(
     await _wait_for_tasks(task_mgr)
 
     _assert_boss_machine(machine, port="/dev/cu.test-ruida")
+    assert machine.driver.config == machine.driver_config
+    assert machine.driver.confirms_execution_completion is True
     connect.assert_awaited_once_with()
+
+
+@pytest.mark.asyncio
+async def test_boss_profile_validates_status_api_during_driver_setup(
+    lite_context, task_mgr, monkeypatch
+):
+    class ControllerClientWithoutStatus:
+        def __init__(self, transport):
+            self.transport = transport
+
+        def stop_process(self):
+            pass
+
+    api = SimpleNamespace(
+        ControllerClient=ControllerClientWithoutStatus,
+        SerialTransport=lambda device, *, baudrate: object(),
+    )
+    monkeypatch.setattr(
+        program_driver.RuidaProgramDriver,
+        "_status_semantics_validated",
+        False,
+    )
+    monkeypatch.setattr(program_driver, "_load_ruida_re", lambda: api)
+    manager = DeviceProfileManager([BUILTIN_DEVICES_DIR])
+    manager.discover()
+    profile = manager.get("Boss LS2040")
+
+    assert profile is not None
+    machine = profile.create_machine(lite_context)
+    await _wait_for_tasks(task_mgr)
+
+    machine.set_driver(
+        RuidaSerialDriver,
+        {
+            "port": "/dev/cu.test-ruida",
+            "baudrate": 115200,
+            "job_profile": "proven",
+        },
+    )
+    await _wait_for_tasks(task_mgr)
+
+    driver = machine.driver
+    assert isinstance(driver, RuidaSerialDriver)
+    assert driver.config == machine.driver_config
+    assert driver.state.error is not None
+    assert driver.state.error.title == (
+        "Installed ruida-re lacks required API: "
+        "ControllerClient.read_machine_status"
+    )
+    assert driver._transport is None

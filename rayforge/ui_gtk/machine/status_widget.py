@@ -3,7 +3,6 @@ from gettext import gettext as _
 from gi.repository import Gtk
 
 from ...machine.driver.driver import (
-    DEVICE_STATUS_LABELS,
     DeviceState,
     DeviceStatus,
 )
@@ -115,9 +114,11 @@ class MachineStatusWidget(Gtk.Box):
 
         if is_nodriver:
             self.label.set_label(_("No driver"))
+            self.set_tooltip_text(None)
             self.icon.set_status(DeviceStatus.UNKNOWN)
         else:
-            self.label.set_label(
-                DEVICE_STATUS_LABELS.get(status, _("Unknown"))
-            )
+            assert self.machine is not None
+            driver = self.machine.driver
+            self.label.set_label(driver.get_device_status_label(status))
+            self.set_tooltip_text(driver.get_device_status_tooltip(status))
             self.icon.set_status(status)

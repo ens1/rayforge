@@ -414,6 +414,9 @@ class DeviceProfile:
 
         context.machine_mgr.add_machine(m)
 
+        if cfg.driver_config is not None:
+            m.driver_config = cfg.driver_config.copy()
+
         driver_uses_gcode = True
         if cfg.driver:
             driver_cls = get_driver_cls(cfg.driver)
@@ -425,9 +428,6 @@ class DeviceProfile:
                     f"Failed to create driver {cfg.driver} "
                     f"for device '{self.name}': {exc}"
                 )
-
-        if cfg.driver_config is not None:
-            m.driver_config = cfg.driver_config.copy()
 
         if driver_uses_gcode and self.dialect_config:
             new_label = _("{name} (device dialect)").format(name=self.name)

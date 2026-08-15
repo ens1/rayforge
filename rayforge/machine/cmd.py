@@ -22,6 +22,7 @@ from .driver import get_driver_cls
 from .driver.driver import (
     DeviceConnectionError,
     ExecutionCompletionUnknownError,
+    JobCancelledError,
 )
 from .driver.dummy import NoDeviceDriver
 from .job_monitor import JobMonitor
@@ -92,6 +93,7 @@ class MachineCmd:
         self._on_progress_callback: Callable[[dict], None] | None = None
         self._execution_confirmation_machine_ids: set[str] = set()
         self._confirmed_idle_reconnect_machine_ids: set[str] = set()
+        self._cancel_pending_machine_ids: set[str] = set()
 
     @property
     def is_job_running(self) -> bool:
@@ -109,6 +111,10 @@ class MachineCmd:
             machine.id in self._execution_confirmation_machine_ids
             or machine.driver.manual_execution_confirmation_required
         )
+
+    def cancel_pending(self, machine: Machine) -> bool:
+        """Whether a Stop command is already pending for this machine."""
+        return machine.id in self._cancel_pending_machine_ids
 
     def select_tool(self, machine: Machine, head_index: int):
         """Adds a 'select_head' task to the task manager."""
@@ -250,6 +256,13 @@ class MachineCmd:
                 f"Job completed. Estimated time: {estimated_hours:.3f}h "
                 f"added to machine hours."
             )
+        except JobCancelledError:
+            if driver.manual_execution_confirmation_required:
+                self._execution_confirmation_machine_ids.add(machine.id)
+            else:
+                self._execution_confirmation_machine_ids.discard(machine.id)
+            logger.info("Job cancellation confirmed by the controller.")
+            return
         except asyncio.CancelledError:
             if driver.manual_execution_confirmation_required:
                 self._execution_confirmation_machine_ids.add(machine.id)
@@ -466,14 +479,44 @@ class MachineCmd:
             lambda ctx: driver.set_hold(is_requesting_hold), key="set-hold"
         )
 
-    def cancel_job(self, machine: Machine):
+    def cancel_job(self, machine: Machine) -> bool:
         """Adds a task to cancel the currently running job on the machine."""
+        machine_id = machine.id
+        if machine_id in self._cancel_pending_machine_ids:
+            return False
+        self._cancel_pending_machine_ids.add(machine_id)
         driver = machine.driver
-        if not driver.confirms_execution_completion:
-            self._execution_confirmation_machine_ids.add(machine.id)
-        self._editor.task_manager.add_coroutine(
-            lambda ctx: driver.cancel(), key="cancel-job"
-        )
+        try:
+            driver.notify_cancel_requested()
+            if not driver.confirms_execution_completion:
+                self._execution_confirmation_machine_ids.add(machine_id)
+        except BaseException:
+            self._cancel_pending_machine_ids.discard(machine_id)
+            raise
+
+        async def cancel() -> None:
+            try:
+                await driver.cancel()
+            except BaseException:
+                if driver.manual_execution_confirmation_required:
+                    self._execution_confirmation_machine_ids.add(machine_id)
+                raise
+            else:
+                if not driver.manual_execution_confirmation_required:
+                    self._execution_confirmation_machine_ids.discard(
+                        machine_id
+                    )
+            finally:
+                self._cancel_pending_machine_ids.discard(machine_id)
+
+        try:
+            self._editor.task_manager.add_coroutine(
+                lambda ctx: cancel(), key=("cancel-job", machine_id)
+            )
+        except BaseException:
+            self._cancel_pending_machine_ids.discard(machine_id)
+            raise
+        return True
 
     def clear_alarm(self, machine: Machine):
         """Adds a task to clear any active alarm on the machine."""

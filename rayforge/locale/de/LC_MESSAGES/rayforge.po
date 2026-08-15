@@ -8913,3 +8913,253 @@ msgstr ""
 #: rayforge/ui_gtk/mainwindow.py
 msgid "Controller reconnected. Click Send or Frame again when ready."
 msgstr ""
+
+#: rayforge/machine/driver/driver.py:185
+#, python-brace-format
+msgid "0 disables; nonzero must be {minimum}–{maximum} Hz"
+msgstr ""
+
+#: rayforge/machine/driver/ruida/program_driver.py:260
+msgid "Ruida driver is not configured."
+msgstr ""
+
+#: rayforge/machine/driver/ruida/program_driver.py:295
+#, python-brace-format
+msgid "Could not connect to the Ruida controller: {error}"
+msgstr ""
+
+#: rayforge/machine/driver/ruida/program_driver.py:335
+msgid "Ruida status monitoring stopped before completion."
+msgstr ""
+
+#: rayforge/machine/driver/ruida/program_driver.py:532
+#, python-brace-format
+msgid ""
+"Ruida status became unavailable before execution completion was confirmed: "
+"{error}"
+msgstr ""
+
+#: rayforge/machine/driver/ruida/program_driver.py:562
+#: rayforge/machine/driver/ruida/program_driver.py:576
+msgid "The Ruida controller returned malformed machine status."
+msgstr ""
+
+#: rayforge/machine/driver/ruida/program_driver.py:625
+msgid "A Ruida execution monitor is already active."
+msgstr ""
+
+#: rayforge/machine/driver/ruida/program_driver.py:682
+msgid ""
+"Ruida reported a stop transition outside a confirmed Rayforge Stop sequence. "
+"Confirm that the controller is idle before reconnecting."
+msgstr ""
+
+#: rayforge/machine/driver/ruida/program_driver.py:704
+msgid ""
+"Ruida never reported this program as active. It may have completed between "
+"status polls or may not have started. Confirm that the controller is idle "
+"before reconnecting."
+msgstr ""
+
+#: rayforge/machine/driver/ruida/program_driver.py:717
+msgid ""
+"Ruida did not report the validated post-execution idle word. Confirm that "
+"the controller is idle before reconnecting."
+msgstr ""
+
+#: rayforge/machine/driver/ruida/program_driver.py:744
+msgid ""
+"Ruida did not report the validated post-Stop idle word. Confirm that the "
+"controller is idle before reconnecting."
+msgstr ""
+
+#: rayforge/machine/driver/ruida/program_driver.py:770
+#, python-brace-format
+msgid ""
+"Ruida reported unvalidated machine status 0x{raw_word:x} while execution was "
+"being monitored. Confirm that the controller is idle before reconnecting."
+msgstr ""
+
+#: rayforge/machine/driver/ruida/program_driver.py:797
+msgid "The Ruida program was cancelled."
+msgstr ""
+
+#: rayforge/machine/driver/ruida/program_driver.py:838
+msgid "The encoded job has no Ruida .rd program payload."
+msgstr ""
+
+#: rayforge/machine/driver/ruida/program_driver.py:862
+#, python-brace-format
+msgid "Invalid Ruida .rd program payload: {error}"
+msgstr ""
+
+#: rayforge/machine/driver/ruida/program_driver.py:878
+#, python-brace-format
+msgid "Unsafe Ruida job rejected: {error}"
+msgstr ""
+
+#: rayforge/machine/driver/ruida/program_driver.py:882
+msgid "A Ruida program transfer is already in progress."
+msgstr ""
+
+#: rayforge/machine/driver/ruida/program_driver.py:899
+msgid ""
+"The previous Ruida program may still be executing. Reconnect only after the "
+"controller is visibly idle."
+msgstr ""
+
+#: rayforge/machine/driver/ruida/program_driver.py:906
+#: rayforge/machine/driver/ruida/program_driver.py:1065
+msgid "The Ruida controller is not connected."
+msgstr ""
+
+#: rayforge/machine/driver/ruida/program_driver.py:935
+msgid "Ruida machine status is ambiguous. No program was transferred."
+msgstr ""
+
+#: rayforge/machine/driver/ruida/program_driver.py:942
+msgid ""
+"The Ruida controller program is active. Wait for it to become idle before "
+"sending another program."
+msgstr ""
+
+#: rayforge/machine/driver/ruida/program_driver.py:972
+#, python-brace-format
+msgid "Ruida program transfer failed: {error}"
+msgstr ""
+
+#: rayforge/machine/driver/ruida/program_driver.py:988
+#, python-brace-format
+msgid "Ruida program transfer returned an invalid receipt: {error}"
+msgstr ""
+
+#: rayforge/machine/driver/ruida/program_driver.py:1045
+msgid "raw commands"
+msgstr ""
+
+#: rayforge/machine/driver/ruida/program_driver.py:1049
+msgid "hold and resume"
+msgstr ""
+
+#: rayforge/machine/driver/ruida/program_driver.py:1139
+msgid ""
+"Ruida Stop delivery was already attempted for this program. Confirm that the "
+"controller is idle before reconnecting."
+msgstr ""
+
+#: rayforge/machine/driver/ruida/program_driver.py:1149
+msgid ""
+"Ruida Stop was sent before this program had a same-generation active status "
+"observation. Confirm that the controller is idle before reconnecting."
+msgstr ""
+
+#: rayforge/machine/driver/ruida/program_driver.py:1195
+msgid ""
+"Ruida Stop completion became ambiguous. Confirm that the controller is idle "
+"before reconnecting."
+msgstr ""
+
+#: rayforge/machine/driver/ruida/program_driver.py:1206
+#: rayforge/machine/driver/ruida/program_driver.py:1212
+msgid "The Ruida client cannot guarantee a no-retry Stop send."
+msgstr ""
+
+#: rayforge/machine/driver/ruida/program_driver.py:1228
+msgid "Ruida Stop returned an invalid transfer receipt."
+msgstr ""
+
+#: rayforge/machine/driver/ruida/program_driver.py:1241
+msgid "Ruida Stop was not delivered as exactly one attempt."
+msgstr ""
+
+#: rayforge/machine/driver/ruida/program_driver.py:1250
+msgid "Ruida Stop returned unexpected serial wire bytes."
+msgstr ""
+
+#: rayforge/machine/driver/ruida/program_driver.py:1260
+msgid "homing"
+msgstr ""
+
+#: rayforge/machine/driver/ruida/program_driver.py:1264
+msgid "direct movement"
+msgstr ""
+
+#: rayforge/machine/driver/ruida/program_driver.py:1268
+msgid "runtime tool selection"
+msgstr ""
+
+#: rayforge/machine/driver/ruida/program_driver.py:1278
+msgid "controller settings"
+msgstr ""
+
+#: rayforge/machine/driver/ruida/program_driver.py:1281
+msgid "alarm control"
+msgstr ""
+
+#: rayforge/machine/driver/ruida/program_driver.py:1285
+msgid "immediate power control"
+msgstr ""
+
+#: rayforge/machine/driver/ruida/program_driver.py:1289
+msgid "focus power control"
+msgstr ""
+
+#: rayforge/machine/driver/ruida/program_driver.py:1297
+msgid "jogging"
+msgstr ""
+
+#: rayforge/machine/driver/ruida/program_driver.py:1303
+#: rayforge/machine/driver/ruida/program_driver.py:1315
+msgid "work coordinate management"
+msgstr ""
+
+#: rayforge/machine/driver/ruida/program_driver.py:1321
+msgid "probing"
+msgstr ""
+
+#: rayforge/machine/driver/ruida/program_driver.py:1325
+#, python-brace-format
+msgid "Ruida program transfer does not support {feature}."
+msgstr ""
+
+#: rayforge/machine/driver/ruida/ruida_serial_driver.py:17
+msgid "Ruida (USB Serial)"
+msgstr ""
+
+#: rayforge/machine/driver/ruida/ruida_serial_driver.py:18
+msgid "Send complete Ruida programs over USB serial"
+msgstr ""
+
+#: rayforge/machine/driver/ruida/ruida_serial_driver.py:26
+msgid "Program idle"
+msgstr ""
+
+#: rayforge/machine/driver/ruida/ruida_serial_driver.py:27
+msgid "Program running"
+msgstr ""
+
+#: rayforge/machine/driver/ruida/ruida_serial_driver.py:28
+msgid "Program paused"
+msgstr ""
+
+#: rayforge/machine/driver/ruida/ruida_serial_driver.py:36
+msgid ""
+"Controller program state only; panel motion is not detected. Check the "
+"machine and route before starting."
+msgstr ""
+
+#: rayforge/machine/driver/ruida/ruida_serial_driver.py:51
+msgid "USB serial port for the controller"
+msgstr ""
+
+#: rayforge/machine/driver/ruida/ruida_serial_driver.py:62
+msgid "Serial port must be configured."
+msgstr ""
+
+#: rayforge/machine/driver/ruida/ruida_serial_driver.py:64
+msgid "Baud rate must be an integer."
+msgstr ""
+
+#: rayforge/machine/driver/ruida/ruida_serial_driver.py:66
+msgid "Baud rate must be positive."
+msgstr ""

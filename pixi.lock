@@ -439,7 +439,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/tzdata-2026c-h151e31d_0.conda
       - pypi: ./
       - pypi: git+https://github.com/ens1/raygeo.git?rev=e21f48c5eb54ebb41b0318b84b62a778005c1f37#e21f48c5eb54ebb41b0318b84b62a778005c1f37
-      - pypi: git+https://github.com/ens1/ruida-re.git?rev=912879daa692cb38b51ee810c07255cc68fb9602#912879daa692cb38b51ee810c07255cc68fb9602
+      - pypi: git+https://github.com/ens1/ruida-re.git?rev=4fa6e0d9e74f9a9ed9f569033ce9286a45dab1e1#4fa6e0d9e74f9a9ed9f569033ce9286a45dab1e1
       - pypi: https://files.pythonhosted.org/packages/02/08/9c41fb51ab5b43eb21674aff13df270e8ba6c4b29c8624e328dc7a9482af/distlib-0.4.3-py2.py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/03/e2/08a497ef684b88559c9cc5f4ad53a37e7b99e727094a86d6ea32536d5d3c/pytest_asyncio-1.4.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/07/6c/aa3f2f849e01cb6a001cd8554a88d4c77c5c1a31c95bdf1cf9301e6d9ef4/defusedxml-0.7.1-py2.py3-none-any.whl
@@ -670,7 +670,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zstd-1.5.7-hbf9d68e_6.conda
       - pypi: ./
       - pypi: git+https://github.com/ens1/raygeo.git?rev=e21f48c5eb54ebb41b0318b84b62a778005c1f37#e21f48c5eb54ebb41b0318b84b62a778005c1f37
-      - pypi: git+https://github.com/ens1/ruida-re.git?rev=912879daa692cb38b51ee810c07255cc68fb9602#912879daa692cb38b51ee810c07255cc68fb9602
+      - pypi: git+https://github.com/ens1/ruida-re.git?rev=4fa6e0d9e74f9a9ed9f569033ce9286a45dab1e1#4fa6e0d9e74f9a9ed9f569033ce9286a45dab1e1
       - pypi: https://files.pythonhosted.org/packages/02/08/9c41fb51ab5b43eb21674aff13df270e8ba6c4b29c8624e328dc7a9482af/distlib-0.4.3-py2.py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/03/e2/08a497ef684b88559c9cc5f4ad53a37e7b99e727094a86d6ea32536d5d3c/pytest_asyncio-1.4.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/07/6c/aa3f2f849e01cb6a001cd8554a88d4c77c5c1a31c95bdf1cf9301e6d9ef4/defusedxml-0.7.1-py2.py3-none-any.whl
@@ -8894,7 +8894,7 @@ packages:
   - streamlit ; extra == 'visual'
   - matplotlib ; extra == 'visual'
   requires_python: '>=3.10'
-- pypi: git+https://github.com/ens1/ruida-re.git?rev=912879daa692cb38b51ee810c07255cc68fb9602#912879daa692cb38b51ee810c07255cc68fb9602
+- pypi: git+https://github.com/ens1/ruida-re.git?rev=4fa6e0d9e74f9a9ed9f569033ce9286a45dab1e1#4fa6e0d9e74f9a9ed9f569033ce9286a45dab1e1
   name: ruida-re
   version: 0.1.0
   requires_dist:
